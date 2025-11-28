@@ -124,6 +124,7 @@ class ShopeeDownloader {
           'api/v2/item',
           'api/v1/item',
           'api/v3/item',
+          'api/v5/item',
           'item/get',
           'item/detail',
           'product/detail',
@@ -139,7 +140,15 @@ class ShopeeDownloader {
           'video_info',
           'video_url',
           'original_video',
-          'raw_video'
+          'raw_video',
+          'share-video',
+          'share_video',
+          'sv.shopee',
+          'cf.shopee',
+          'item/get_extra',
+          'item/get_detail',
+          'product/get',
+          'product/get_detail'
         ];
         
         const isApiRequest = apiPatterns.some(pattern => url.includes(pattern));
@@ -205,10 +214,25 @@ class ShopeeDownloader {
       
       // Definir user agent de iPhone para receber vídeos de melhor qualidade
       // Sites costumam servir MP4 direto de alta qualidade para iOS
-      await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1');
+      const userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1';
+      await page.setUserAgent(userAgent);
       
       // Adicionar viewport de iPhone para parecer mais real
       await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 3 });
+      
+      // Adicionar headers extras que podem ajudar a obter vídeos de melhor qualidade
+      await page.setExtraHTTPHeaders({
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0'
+      });
       
       // Adicionar cookies de sessão se disponíveis (opcional - via variável de ambiente)
       // Formato: COOKIE_NAME1=value1; COOKIE_NAME2=value2
@@ -530,10 +554,148 @@ class ShopeeDownloader {
           return finalVideoUrl;
         }
 
+        // Se não encontrou, tentar fazer requisições diretas para diferentes endpoints da API
+        // Extrair itemid e shopid da URL se possível
+        let itemId = null;
+        let shopId = null;
+        try {
+          const urlMatch = decodedUrl.match(/item[_-]?id[=:](\d+)/i) || decodedUrl.match(/i\.(\d+)/);
+          if (urlMatch) itemId = urlMatch[1];
+          
+          const shopMatch = decodedUrl.match(/shop[_-]?id[=:](\d+)/i) || decodedUrl.match(/s\.(\d+)/);
+          if (shopMatch) shopId = shopMatch[1];
+          
+          // Tentar extrair de parâmetros de query
+          const urlObj = new URL(decodedUrl);
+          itemId = itemId || urlObj.searchParams.get('itemid') || urlObj.searchParams.get('item_id');
+          shopId = shopId || urlObj.searchParams.get('shopid') || urlObj.searchParams.get('shop_id');
+        } catch (e) {
+          // Ignorar erros
+        }
+        
+        // Se encontrou itemid, tentar diferentes endpoints da API
+        if (itemId && shopId) {
+          console.log(`🔍 Tentando endpoints diretos da API (itemid: ${itemId}, shopid: ${shopId})...`);
+          
+          const apiEndpoints = [
+            `https://shopee.com.br/api/v4/item/get_item_detail?itemid=${itemId}&shopid=${shopId}`,
+            `https://shopee.com.br/api/v2/item/get?itemid=${itemId}&shopid=${shopId}`,
+            `https://shopee.com.br/api/v1/item/get?itemid=${itemId}&shopid=${shopId}`,
+            `https://shopee.com.br/api/v4/item/get?itemid=${itemId}&shopid=${shopId}`,
+            `https://shopee.com.br/api/v4/item/get_item_extra?itemid=${itemId}&shopid=${shopId}`
+          ];
+          
+          const headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+            'Accept': 'application/json',
+            'Accept-Language': 'pt-BR,pt;q=0.9',
+            'Referer': 'https://shopee.com.br/',
+            'Origin': 'https://shopee.com.br',
+            'X-Requested-With': 'XMLHttpRequest'
+          };
+          
+          // Adicionar cookies se disponíveis
+          if (process.env.SHOPEE_COOKIES) {
+            headers['Cookie'] = process.env.SHOPEE_COOKIES;
+          }
+          
+          for (const endpoint of apiEndpoints) {
+            try {
+              console.log(`   Tentando: ${endpoint.substring(0, 80)}...`);
+              const apiResponse = await axios.get(endpoint, {
+                headers: headers,
+                timeout: 10000,
+                validateStatus: (status) => status < 500 // Aceitar 4xx mas não 5xx
+              });
+              
+              if (apiResponse.status === 200 && apiResponse.data) {
+                // Procurar URLs de vídeo na resposta
+                const jsonStr = JSON.stringify(apiResponse.data);
+                const videoUrlMatches = jsonStr.match(/https?:\/\/[^\s"']+\.(mp4|webm|m3u8)/gi);
+                if (videoUrlMatches && videoUrlMatches.length > 0) {
+                  console.log(`   ✅ Encontrou ${videoUrlMatches.length} URLs de vídeo neste endpoint!`);
+                  // Processar essas URLs
+                  const findVideoInObject = (obj) => {
+                    const foundUrls = [];
+                    const search = (val, path = '') => {
+                      if (typeof val === 'string' && /https?:\/\/[^\s"']+\.(mp4|webm|m3u8)/i.test(val)) {
+                        const urlLower = val.toLowerCase();
+                        let quality = 'unknown';
+                        let isOriginal = urlLower.includes('original') || urlLower.includes('raw') || 
+                                        urlLower.includes('source') || urlLower.includes('master') ||
+                                        urlLower.includes('no_watermark') || urlLower.includes('nowm');
+                        
+                        if (val.includes('1080') || urlLower.includes('hd') || urlLower.includes('high') || isOriginal) {
+                          quality = '1080p';
+                        } else if (val.includes('720') || urlLower.includes('720p') || urlLower.includes('hd720')) {
+                          quality = '720p';
+                        } else if (val.includes('480') || urlLower.includes('480p')) {
+                          quality = '480p';
+                        } else if (val.includes('360') || urlLower.includes('360p')) {
+                          quality = '360p';
+                        }
+                        
+                        foundUrls.push({ url: val, quality: quality, path: path, isOriginal: isOriginal });
+                      } else if (typeof val === 'object' && val !== null) {
+                        for (let key in val) {
+                          search(val[key], path ? `${path}.${key}` : key);
+                        }
+                      }
+                    };
+                    search(obj);
+                    return foundUrls;
+                  };
+                  
+                  const foundUrls = findVideoInObject(apiResponse.data);
+                  if (foundUrls.length > 0) {
+                    allVideoUrls.push(...foundUrls);
+                    console.log(`   ✅ Adicionadas ${foundUrls.length} URLs da API direta`);
+                  }
+                }
+              }
+            } catch (e) {
+              // Continuar tentando outros endpoints
+              if (e.response && e.response.status === 404) {
+                console.log(`   ⚠️ Endpoint não encontrado (404)`);
+              }
+            }
+          }
+          
+          // Se encontrou URLs na API direta, reordenar e escolher a melhor
+          if (allVideoUrls.length > 0) {
+            const qualityOrder = { '1080p': 6, '720p': 5, '480p': 4, '360p': 3, 'unknown': 2, 'default': 1 };
+            allVideoUrls.sort((a, b) => {
+              if (a.isOriginal && !b.isOriginal) return -1;
+              if (!a.isOriginal && b.isOriginal) return 1;
+              const aQuality = qualityOrder[a.quality.toLowerCase()] || 0;
+              const bQuality = qualityOrder[b.quality.toLowerCase()] || 0;
+              return bQuality - aQuality;
+            });
+            
+            const uniqueUrls = [];
+            const seenUrls = new Set();
+            for (const videoUrl of allVideoUrls) {
+              if (!seenUrls.has(videoUrl.url)) {
+                seenUrls.add(videoUrl.url);
+                uniqueUrls.push(videoUrl);
+              }
+            }
+            
+            if (uniqueUrls.length > 0) {
+              finalVideoUrl = uniqueUrls[0].url;
+              console.log(`\n✅ URL encontrada via API direta: ${uniqueUrls[0].quality} - ${finalVideoUrl.substring(0, 80)}`);
+              return finalVideoUrl;
+            }
+          }
+        }
+        
         // Se não encontrou, tentar método alternativo com axios (usando User-Agent de iPhone)
         const response = await axios.get(decodedUrl, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'pt-BR,pt;q=0.9',
+            'Referer': 'https://shopee.com.br/'
           }
         });
 
