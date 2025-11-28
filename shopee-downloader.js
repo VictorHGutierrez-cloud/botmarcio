@@ -1,10 +1,14 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const { execSync } = require('child_process');
+
+// Usar plugin stealth para evitar detecção de bot
+puppeteer.use(StealthPlugin());
 
 class ShopeeDownloader {
   constructor() {
@@ -99,18 +103,84 @@ class ShopeeDownloader {
 
       const page = await browser.newPage();
       
-      // Monitorar requisições de rede para encontrar URLs de vídeo HD (ANTES de navegar)
+      // Monitorar requisições de rede para encontrar URLs de vídeo HD e JSON da API (ANTES de navegar)
       const networkRequests = [];
+      const apiResponses = []; // Armazenar respostas JSON da API
+      
       page.on('response', async (response) => {
         const url = response.url();
+        
+        // Capturar URLs de vídeo
         if (url.match(/\.(mp4|webm|m3u8)/i)) {
           networkRequests.push(url);
           console.log('URL de vídeo encontrada na rede:', url);
         }
+        
+        // Interceptar requisições JSON da API da Shopee (múltiplos endpoints possíveis)
+        const apiPatterns = [
+          'get_item_detail',
+          'api/v4/item',
+          'api/v2/item',
+          'api/v1/item',
+          'item/get',
+          'item/detail',
+          'product/detail',
+          'video',
+          'media',
+          'cdn.shopee',
+          'shopee.com.br/api'
+        ];
+        
+        const isApiRequest = apiPatterns.some(pattern => url.includes(pattern));
+        
+        if (isApiRequest) {
+          try {
+            const contentType = response.headers()['content-type'] || '';
+            if (contentType.includes('application/json') || contentType.includes('text/json')) {
+              const jsonData = await response.json();
+              apiResponses.push({ url: url, data: jsonData });
+              console.log('✅ Resposta JSON da API capturada:', url.substring(0, 100));
+            }
+          } catch (e) {
+            // Tentar ler como texto e fazer parse manual
+            try {
+              const text = await response.text();
+              const jsonData = JSON.parse(text);
+              apiResponses.push({ url: url, data: jsonData });
+              console.log('✅ Resposta JSON da API capturada (texto):', url.substring(0, 100));
+            } catch (e2) {
+              // Ignorar erros ao ler JSON
+            }
+          }
+        }
       });
       
-      // Definir user agent para evitar bloqueios
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+      // Definir user agent de iPhone para receber vídeos de melhor qualidade
+      // Sites costumam servir MP4 direto de alta qualidade para iOS
+      await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1');
+      
+      // Adicionar viewport de iPhone para parecer mais real
+      await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 3 });
+      
+      // Adicionar cookies de sessão se disponíveis (opcional - via variável de ambiente)
+      // Formato: COOKIE_NAME1=value1; COOKIE_NAME2=value2
+      if (process.env.SHOPEE_COOKIES) {
+        try {
+          const cookies = process.env.SHOPEE_COOKIES.split(';').map(cookie => {
+            const [name, value] = cookie.trim().split('=');
+            return {
+              name: name.trim(),
+              value: value.trim(),
+              domain: '.shopee.com.br',
+              path: '/'
+            };
+          });
+          await page.setCookie(...cookies);
+          console.log('✅ Cookies de sessão adicionados');
+        } catch (e) {
+          console.warn('⚠️ Erro ao adicionar cookies:', e.message);
+        }
+      }
       
       try {
         await page.goto(decodedUrl, { 
@@ -118,10 +188,89 @@ class ShopeeDownloader {
           timeout: 30000 
         });
 
-        // Aguardar o vídeo carregar completamente (aumentar tempo para garantir HD)
+        // Aguardar o vídeo carregar completamente e aguardar requisições da API
         await new Promise(resolve => setTimeout(resolve, 5000));
 
-        // Tentar encontrar o elemento de vídeo com melhor qualidade
+        // PRIMEIRO: Tentar extrair URL de vídeo das respostas JSON da API (melhor qualidade)
+        let apiVideoUrl = null;
+        let bestQualityUrl = null;
+        const allVideoUrls = []; // Coletar todas as URLs encontradas para comparar qualidade
+        
+        for (const apiResponse of apiResponses) {
+          try {
+            const findVideoInObject = (obj, path = '') => {
+              if (!obj || typeof obj !== 'object') return [];
+              
+              const foundUrls = [];
+              
+              for (let key in obj) {
+                const currentPath = path ? `${path}.${key}` : key;
+                const value = obj[key];
+                
+                // Procurar por campos que podem conter URLs de vídeo
+                if (typeof value === 'string') {
+                  // Verificar se é uma URL de vídeo
+                  if (/https?:\/\/[^\s"']+\.(mp4|webm|m3u8)/i.test(value)) {
+                    // Determinar qualidade pela URL
+                    let quality = 'default';
+                    if (value.includes('1080') || value.includes('hd') || value.toLowerCase().includes('high') || value.toLowerCase().includes('original')) {
+                      quality = '1080p';
+                    } else if (value.includes('720')) {
+                      quality = '720p';
+                    } else if (value.includes('480')) {
+                      quality = '480p';
+                    } else if (value.includes('360')) {
+                      quality = '360p';
+                    }
+                    
+                    foundUrls.push({ url: value, quality: quality, path: currentPath });
+                    console.log(`📹 URL de vídeo encontrada na API (${currentPath}, ${quality}):`, value.substring(0, 80));
+                  }
+                  // Também procurar por campos que podem conter URLs de vídeo em objetos aninhados
+                  // Ex: video_info.url, video.url, media.video_url, etc.
+                  if (key.toLowerCase().includes('video') || key.toLowerCase().includes('media')) {
+                    // Tentar extrair URL mesmo que não termine com extensão
+                    const urlMatch = value.match(/https?:\/\/[^\s"']+/i);
+                    if (urlMatch && !value.match(/\.(jpg|jpeg|png|gif|webp|svg)/i)) {
+                      foundUrls.push({ url: urlMatch[0], quality: 'unknown', path: currentPath });
+                    }
+                  }
+                } else if (typeof value === 'object' && value !== null) {
+                  const nestedUrls = findVideoInObject(value, currentPath);
+                  foundUrls.push(...nestedUrls);
+                }
+              }
+              return foundUrls;
+            };
+            
+            const foundUrls = findVideoInObject(apiResponse.data);
+            allVideoUrls.push(...foundUrls);
+          } catch (e) {
+            console.warn('⚠️ Erro ao processar resposta da API:', e.message);
+          }
+        }
+        
+        // Ordenar todas as URLs encontradas por qualidade
+        if (allVideoUrls.length > 0) {
+          const qualityOrder = { '1080p': 5, '720p': 4, '480p': 3, '360p': 2, 'default': 1, 'unknown': 0 };
+          allVideoUrls.sort((a, b) => {
+            const aQuality = qualityOrder[a.quality.toLowerCase()] || 0;
+            const bQuality = qualityOrder[b.quality.toLowerCase()] || 0;
+            return bQuality - aQuality;
+          });
+          
+          bestQualityUrl = allVideoUrls[0].url;
+          console.log(`✅ Melhor URL encontrada na API: ${allVideoUrls[0].quality} - ${bestQualityUrl.substring(0, 80)}`);
+        }
+        
+        // Se encontrou URL na API, usar ela (melhor qualidade)
+        if (bestQualityUrl) {
+          await browser.close();
+          console.log('✅ URL do vídeo encontrada via API (melhor qualidade):', bestQualityUrl);
+          return bestQualityUrl;
+        }
+
+        // SEGUNDO: Tentar encontrar o elemento de vídeo com melhor qualidade (fallback)
         const videoUrl = await page.evaluate(() => {
           const videoUrls = [];
           
@@ -252,10 +401,10 @@ class ShopeeDownloader {
           return finalVideoUrl;
         }
 
-        // Se não encontrou, tentar método alternativo com axios
+        // Se não encontrou, tentar método alternativo com axios (usando User-Agent de iPhone)
         const response = await axios.get(decodedUrl, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
           }
         });
 
@@ -346,7 +495,7 @@ class ShopeeDownloader {
         url: videoUrl,
         responseType: 'stream',
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
           'Referer': 'https://shopee.com.br/'
         },
         timeout: 300000 // 5 minutos
@@ -397,20 +546,24 @@ class ShopeeDownloader {
   }
 
   /**
-   * Processa e melhora a qualidade do vídeo usando ffmpeg
+   * Otimiza o vídeo usando ffmpeg SEM alterar a resolução (sem upscaling)
+   * Apenas melhora codec, compatibilidade e qualidade de encoding
    */
   async enhanceVideo(inputPath, outputPath) {
     return new Promise(async (resolve, reject) => {
-      console.log('🎬 Iniciando melhoria de qualidade do vídeo...');
+      console.log('🎬 Iniciando otimização do vídeo (sem alterar resolução)...');
       
       // Verificar se ffmpeg está disponível
       try {
         execSync('which ffmpeg', { encoding: 'utf-8' });
         console.log('✅ FFmpeg encontrado');
       } catch (e) {
-        console.warn('⚠️ FFmpeg não encontrado, pulando melhoria de qualidade');
+        console.warn('⚠️ FFmpeg não encontrado, usando arquivo original');
         // Se não tiver ffmpeg, apenas copiar o arquivo
         fs.copyFileSync(inputPath, outputPath);
+        if (fs.existsSync(inputPath)) {
+          fs.unlinkSync(inputPath);
+        }
         resolve(outputPath);
         return;
       }
@@ -420,60 +573,46 @@ class ShopeeDownloader {
         const videoInfo = await this.getVideoInfo(inputPath);
         console.log(`📐 Resolução original: ${videoInfo.width}x${videoInfo.height}`);
         
-        // Calcular resolução de saída (garantir mínimo de 720p de altura)
-        let targetWidth, targetHeight;
-        const minHeight = 720; // Mínimo exigido pela Shopee é 576p, vamos garantir 720p
+        // MANTER a resolução original - apenas garantir que dimensões sejam pares (requisito H.264)
+        let targetWidth = videoInfo.width;
+        let targetHeight = videoInfo.height;
         
-        if (videoInfo.height < minHeight) {
-          // Se a altura for menor que 720p, fazer upscale proporcional
-          const scale = minHeight / videoInfo.height;
-          targetHeight = minHeight;
-          targetWidth = Math.round(videoInfo.width * scale);
-          
-          // Garantir que a largura seja par (requisito do H.264)
-          if (targetWidth % 2 !== 0) {
-            targetWidth += 1;
-          }
-          
-          console.log(`⬆️ Upscaling de ${videoInfo.width}x${videoInfo.height} para ${targetWidth}x${targetHeight}`);
-        } else if (videoInfo.height < 1080) {
-          // Se estiver entre 720p e 1080p, aumentar para 1080p se possível
-          const scale = 1080 / videoInfo.height;
-          targetHeight = 1080;
-          targetWidth = Math.round(videoInfo.width * scale);
-          
-          // Garantir que seja par
-          if (targetWidth % 2 !== 0) {
-            targetWidth += 1;
-          }
-          
-          console.log(`⬆️ Upscaling de ${videoInfo.width}x${videoInfo.height} para ${targetWidth}x${targetHeight}`);
-        } else {
-          // Se já for 1080p ou maior, manter a resolução mas melhorar qualidade
-          targetWidth = videoInfo.width;
-          targetHeight = videoInfo.height;
-          if (targetWidth % 2 !== 0) {
-            targetWidth += 1;
-          }
-          console.log(`✨ Mantendo resolução ${targetWidth}x${targetHeight}, melhorando qualidade`);
+        if (targetWidth % 2 !== 0) {
+          targetWidth += 1;
+        }
+        if (targetHeight % 2 !== 0) {
+          targetHeight += 1;
+        }
+        
+        // Se precisou ajustar, usar scale apenas para corrigir paridade
+        const needsScale = targetWidth !== videoInfo.width || targetHeight !== videoInfo.height;
+        const scaleFilter = needsScale ? `scale=${targetWidth}:${targetHeight}` : null;
+        
+        console.log(`✨ Mantendo resolução original ${videoInfo.width}x${videoInfo.height} (sem upscaling)`);
+        if (needsScale) {
+          console.log(`🔧 Ajustando para ${targetWidth}x${targetHeight} (apenas para compatibilidade H.264)`);
         }
 
-        // Configurar ffmpeg com upscale inteligente
-        const scaleFilter = `scale=${targetWidth}:${targetHeight}:flags=lanczos+accurate_rnd+full_chroma_int`;
+        // Configurar ffmpeg SEM upscaling - apenas otimização de codec
+        const outputOptions = [
+          '-preset medium', // Balance entre velocidade e qualidade
+          '-crf 20', // Qualidade alta (menor = melhor, 18-23 é ideal)
+          '-movflags +faststart', // Otimização para streaming
+          '-pix_fmt yuv420p', // Formato compatível
+          '-profile:v high', // Perfil H.264 de alta qualidade
+          '-level 4.0',
+          '-b:a 192k' // Áudio de alta qualidade
+        ];
+        
+        // Adicionar scale apenas se necessário para corrigir paridade
+        if (scaleFilter) {
+          outputOptions.push(`-vf ${scaleFilter}`);
+        }
         
         ffmpeg(inputPath)
           .videoCodec('libx264')
           .audioCodec('aac')
-          .outputOptions([
-            '-preset medium', // Mudado de 'slow' para 'medium' para ser mais rápido
-            '-crf 20', // Qualidade melhor (menor = melhor qualidade, 18-23 é bom)
-            `-vf ${scaleFilter}`, // Upscale com algoritmo de alta qualidade
-            '-movflags +faststart',
-            '-pix_fmt yuv420p',
-            '-profile:v high', // Perfil H.264 de alta qualidade
-            '-level 4.0',
-            '-b:a 192k' // Áudio de alta qualidade
-          ])
+          .outputOptions(outputOptions)
           .on('start', (commandLine) => {
             console.log('🚀 FFmpeg iniciado:', commandLine);
           })
@@ -483,7 +622,7 @@ class ShopeeDownloader {
             }
           })
           .on('end', async () => {
-            console.log('✅ Vídeo melhorado com sucesso!');
+            console.log('✅ Vídeo otimizado com sucesso (resolução original mantida)!');
             
             // Verificar resolução final
             try {
@@ -515,48 +654,15 @@ class ShopeeDownloader {
           
       } catch (error) {
         console.error('❌ Erro ao obter informações do vídeo:', error.message);
-        // Se não conseguir obter info, fazer upscale padrão para 720p
-        console.log('📋 Aplicando upscale padrão para 720p...');
-        
-        ffmpeg(inputPath)
-          .videoCodec('libx264')
-          .audioCodec('aac')
-          .outputOptions([
-            '-preset medium',
-            '-crf 20',
-            '-vf scale=720:1280:flags=lanczos+accurate_rnd+full_chroma_int',
-            '-movflags +faststart',
-            '-pix_fmt yuv420p',
-            '-profile:v high',
-            '-level 4.0',
-            '-b:a 192k'
-          ])
-          .on('start', (commandLine) => {
-            console.log('🚀 FFmpeg iniciado (modo padrão):', commandLine);
-          })
-          .on('progress', (progress) => {
-            if (progress.percent) {
-              console.log(`⏳ Processando: ${Math.round(progress.percent)}%`);
-            }
-          })
-          .on('end', () => {
-            console.log('✅ Vídeo processado com sucesso!');
-            if (fs.existsSync(inputPath)) {
-              fs.unlinkSync(inputPath);
-            }
-            resolve(outputPath);
-          })
-          .on('error', (err) => {
-            console.error('❌ Erro ao processar vídeo:', err.message);
-            if (fs.existsSync(inputPath)) {
-              fs.copyFileSync(inputPath, outputPath);
-              fs.unlinkSync(inputPath);
-              resolve(outputPath);
-            } else {
-              reject(err);
-            }
-          })
-          .save(outputPath);
+        console.log('📋 Usando arquivo original sem processamento');
+        // Se não conseguir obter info, apenas copiar o arquivo
+        if (fs.existsSync(inputPath)) {
+          fs.copyFileSync(inputPath, outputPath);
+          fs.unlinkSync(inputPath);
+          resolve(outputPath);
+        } else {
+          reject(error);
+        }
       }
     });
   }
