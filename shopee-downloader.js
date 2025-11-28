@@ -94,7 +94,17 @@ class ShopeeDownloader {
         if (chromiumPath) {
           launchOptions.executablePath = chromiumPath;
         } else {
-          console.warn('Chromium não encontrado no sistema. Tentando usar o padrão do Puppeteer (pode falhar se não houver Chromium instalado).');
+          console.warn('Chromium não encontrado no sistema. Tentando usar o Chromium do Puppeteer...');
+          // Se não encontrou Chromium no sistema, tentar usar o do Puppeteer
+          // Mas primeiro, verificar se PUPPETEER_SKIP_CHROMIUM_DOWNLOAD está desabilitado
+          if (process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true') {
+            console.error('ERRO: Chromium não encontrado e PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true');
+            console.error('Soluções:');
+            console.error('1. Remova PUPPETEER_SKIP_CHROMIUM_DOWNLOAD ou defina como false');
+            console.error('2. Configure PUPPETEER_EXECUTABLE_PATH com o caminho correto do Chromium');
+            throw new Error('Chromium não encontrado no sistema. Configure PUPPETEER_EXECUTABLE_PATH ou remova PUPPETEER_SKIP_CHROMIUM_DOWNLOAD.');
+          }
+          // Se PUPPETEER_SKIP_CHROMIUM_DOWNLOAD não estiver definido, usar o Chromium do Puppeteer
         }
       }
 
