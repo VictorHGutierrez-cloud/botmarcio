@@ -46,31 +46,34 @@ class ShopeeDownloader {
         ]
       };
 
-      // No Railway, usar Chromium do sistema (já instalado via apt)
-      // Primeiro, verificar se há um caminho especificado via variável de ambiente
+      // Verificar se há um caminho especificado via variável de ambiente
       if (process.env.PUPPETEER_EXECUTABLE_PATH) {
         launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
         console.log(`Usando Chromium da variável de ambiente: ${launchOptions.executablePath}`);
-      } else if (process.env.RAILWAY_ENVIRONMENT || process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD) {
-        // Tentar encontrar Chromium em caminhos comuns do sistema
+      } else if (process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true') {
+        // Se PUPPETEER_SKIP_CHROMIUM_DOWNLOAD está definido, tentar encontrar Chromium no sistema
+        // Mas no Ubuntu 24.04, o chromium-browser é apenas um wrapper para snap
+        // Então vamos tentar encontrar um Chromium real ou usar o do Puppeteer
         const possiblePaths = [
           '/usr/bin/chromium',
-          '/usr/bin/chromium-browser',
           '/usr/bin/google-chrome-stable',
-          '/usr/bin/google-chrome',
-          '/snap/bin/chromium'
+          '/usr/bin/google-chrome'
         ];
         
         let chromiumPath = null;
         for (const path of possiblePaths) {
           try {
             if (fs.existsSync(path)) {
-              // Verificar se é um executável válido (não um script wrapper)
+              // Verificar se não é um script wrapper (verificar se é binário ELF)
               const stats = fs.statSync(path);
-              if (stats.isFile() && (stats.mode & parseInt('111', 8))) {
-                chromiumPath = path;
-                console.log(`Chromium encontrado em: ${path}`);
-                break;
+              if (stats.isFile()) {
+                // Ler primeiros bytes para verificar se é ELF (binário real)
+                const buffer = fs.readFileSync(path, { start: 0, end: 4 });
+                if (buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46) {
+                  chromiumPath = path;
+                  console.log(`Chromium encontrado em: ${path}`);
+                  break;
+                }
               }
             }
           } catch (e) {
@@ -78,34 +81,17 @@ class ShopeeDownloader {
           }
         }
         
-        // Se não encontrou nos caminhos fixos, tentar via which
-        if (!chromiumPath) {
-          try {
-            const whichResult = execSync('which chromium 2>/dev/null || which chromium-browser 2>/dev/null || which google-chrome-stable 2>/dev/null', { encoding: 'utf-8' }).trim();
-            if (whichResult && fs.existsSync(whichResult)) {
-              chromiumPath = whichResult;
-              console.log(`Chromium encontrado via which: ${chromiumPath}`);
-            }
-          } catch (e) {
-            console.log('Chromium não encontrado via which');
-          }
-        }
-        
         if (chromiumPath) {
           launchOptions.executablePath = chromiumPath;
         } else {
-          console.warn('Chromium não encontrado no sistema. Tentando usar o Chromium do Puppeteer...');
-          // Se não encontrou Chromium no sistema, tentar usar o do Puppeteer
-          // Mas primeiro, verificar se PUPPETEER_SKIP_CHROMIUM_DOWNLOAD está desabilitado
-          if (process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true') {
-            console.error('ERRO: Chromium não encontrado e PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true');
-            console.error('Soluções:');
-            console.error('1. Remova PUPPETEER_SKIP_CHROMIUM_DOWNLOAD ou defina como false');
-            console.error('2. Configure PUPPETEER_EXECUTABLE_PATH com o caminho correto do Chromium');
-            throw new Error('Chromium não encontrado no sistema. Configure PUPPETEER_EXECUTABLE_PATH ou remova PUPPETEER_SKIP_CHROMIUM_DOWNLOAD.');
-          }
-          // Se PUPPETEER_SKIP_CHROMIUM_DOWNLOAD não estiver definido, usar o Chromium do Puppeteer
+          console.warn('Chromium não encontrado no sistema e PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true');
+          console.warn('Usando Chromium do Puppeteer (será baixado automaticamente)...');
+          // Remover a restrição para permitir que Puppeteer baixe o Chromium
+          delete process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD;
         }
+      } else {
+        // Se PUPPETEER_SKIP_CHROMIUM_DOWNLOAD não estiver definido, usar o Chromium do Puppeteer
+        console.log('Usando Chromium do Puppeteer (será baixado automaticamente se necessário)...');
       }
 
       const browser = await puppeteer.launch(launchOptions);

@@ -3,9 +3,7 @@ nixPkgs = ["nodejs_20"]
 
 [phases.install]
 cmds = [
-  "sudo apt-get update && sudo apt-get install -y --no-install-recommends chromium chromium-browser || true",
   "export npm_config_cache=/tmp/.npm-cache",
-  "export PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true",
   "npm ci --prefer-offline --no-audit --legacy-peer-deps"
 ]
 
