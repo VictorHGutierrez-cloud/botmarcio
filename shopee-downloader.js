@@ -373,59 +373,191 @@ class ShopeeDownloader {
   }
 
   /**
+   * Obtém informações do vídeo (resolução, etc)
+   */
+  async getVideoInfo(videoPath) {
+    return new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(videoPath, (err, metadata) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        const videoStream = metadata.streams.find(s => s.codec_type === 'video');
+        if (videoStream) {
+          resolve({
+            width: videoStream.width,
+            height: videoStream.height,
+            duration: metadata.format.duration
+          });
+        } else {
+          reject(new Error('Stream de vídeo não encontrado'));
+        }
+      });
+    });
+  }
+
+  /**
    * Processa e melhora a qualidade do vídeo usando ffmpeg
    */
   async enhanceVideo(inputPath, outputPath) {
-    return new Promise((resolve, reject) => {
-      console.log('Melhorando qualidade do vídeo...');
+    return new Promise(async (resolve, reject) => {
+      console.log('🎬 Iniciando melhoria de qualidade do vídeo...');
       
       // Verificar se ffmpeg está disponível
       try {
         execSync('which ffmpeg', { encoding: 'utf-8' });
+        console.log('✅ FFmpeg encontrado');
       } catch (e) {
-        console.warn('FFmpeg não encontrado, pulando melhoria de qualidade');
+        console.warn('⚠️ FFmpeg não encontrado, pulando melhoria de qualidade');
         // Se não tiver ffmpeg, apenas copiar o arquivo
         fs.copyFileSync(inputPath, outputPath);
         resolve(outputPath);
         return;
       }
 
-      ffmpeg(inputPath)
-        .videoCodec('libx264')
-        .audioCodec('aac')
-        .outputOptions([
-          '-preset slow',
-          '-crf 23',
-          '-vf scale=720:1280:flags=lanczos', // Upscale para 720p (vertical, formato Shopee)
-          '-movflags +faststart',
-          '-pix_fmt yuv420p'
-        ])
-        .on('start', (commandLine) => {
-          console.log('FFmpeg iniciado:', commandLine);
-        })
-        .on('progress', (progress) => {
-          console.log('Processando:', Math.round(progress.percent || 0) + '%');
-        })
-        .on('end', () => {
-          console.log('Vídeo melhorado com sucesso!');
-          // Remover arquivo original
-          if (fs.existsSync(inputPath)) {
-            fs.unlinkSync(inputPath);
+      try {
+        // Obter informações do vídeo original
+        const videoInfo = await this.getVideoInfo(inputPath);
+        console.log(`📐 Resolução original: ${videoInfo.width}x${videoInfo.height}`);
+        
+        // Calcular resolução de saída (garantir mínimo de 720p de altura)
+        let targetWidth, targetHeight;
+        const minHeight = 720; // Mínimo exigido pela Shopee é 576p, vamos garantir 720p
+        
+        if (videoInfo.height < minHeight) {
+          // Se a altura for menor que 720p, fazer upscale proporcional
+          const scale = minHeight / videoInfo.height;
+          targetHeight = minHeight;
+          targetWidth = Math.round(videoInfo.width * scale);
+          
+          // Garantir que a largura seja par (requisito do H.264)
+          if (targetWidth % 2 !== 0) {
+            targetWidth += 1;
           }
-          resolve(outputPath);
-        })
-        .on('error', (err) => {
-          console.error('Erro ao processar vídeo:', err);
-          // Se der erro, usar o arquivo original
-          if (fs.existsSync(inputPath)) {
-            fs.copyFileSync(inputPath, outputPath);
-            fs.unlinkSync(inputPath);
+          
+          console.log(`⬆️ Upscaling de ${videoInfo.width}x${videoInfo.height} para ${targetWidth}x${targetHeight}`);
+        } else if (videoInfo.height < 1080) {
+          // Se estiver entre 720p e 1080p, aumentar para 1080p se possível
+          const scale = 1080 / videoInfo.height;
+          targetHeight = 1080;
+          targetWidth = Math.round(videoInfo.width * scale);
+          
+          // Garantir que seja par
+          if (targetWidth % 2 !== 0) {
+            targetWidth += 1;
+          }
+          
+          console.log(`⬆️ Upscaling de ${videoInfo.width}x${videoInfo.height} para ${targetWidth}x${targetHeight}`);
+        } else {
+          // Se já for 1080p ou maior, manter a resolução mas melhorar qualidade
+          targetWidth = videoInfo.width;
+          targetHeight = videoInfo.height;
+          if (targetWidth % 2 !== 0) {
+            targetWidth += 1;
+          }
+          console.log(`✨ Mantendo resolução ${targetWidth}x${targetHeight}, melhorando qualidade`);
+        }
+
+        // Configurar ffmpeg com upscale inteligente
+        const scaleFilter = `scale=${targetWidth}:${targetHeight}:flags=lanczos+accurate_rnd+full_chroma_int`;
+        
+        ffmpeg(inputPath)
+          .videoCodec('libx264')
+          .audioCodec('aac')
+          .outputOptions([
+            '-preset medium', // Mudado de 'slow' para 'medium' para ser mais rápido
+            '-crf 20', // Qualidade melhor (menor = melhor qualidade, 18-23 é bom)
+            `-vf ${scaleFilter}`, // Upscale com algoritmo de alta qualidade
+            '-movflags +faststart',
+            '-pix_fmt yuv420p',
+            '-profile:v high', // Perfil H.264 de alta qualidade
+            '-level 4.0',
+            '-b:a 192k' // Áudio de alta qualidade
+          ])
+          .on('start', (commandLine) => {
+            console.log('🚀 FFmpeg iniciado:', commandLine);
+          })
+          .on('progress', (progress) => {
+            if (progress.percent) {
+              console.log(`⏳ Processando: ${Math.round(progress.percent)}%`);
+            }
+          })
+          .on('end', async () => {
+            console.log('✅ Vídeo melhorado com sucesso!');
+            
+            // Verificar resolução final
+            try {
+              const finalInfo = await this.getVideoInfo(outputPath);
+              console.log(`📐 Resolução final: ${finalInfo.width}x${finalInfo.height}`);
+            } catch (e) {
+              console.warn('Não foi possível verificar resolução final:', e.message);
+            }
+            
+            // Remover arquivo original
+            if (fs.existsSync(inputPath)) {
+              fs.unlinkSync(inputPath);
+            }
             resolve(outputPath);
-          } else {
-            reject(err);
-          }
-        })
-        .save(outputPath);
+          })
+          .on('error', (err) => {
+            console.error('❌ Erro ao processar vídeo:', err.message);
+            // Se der erro, usar o arquivo original
+            if (fs.existsSync(inputPath)) {
+              console.log('📋 Usando arquivo original devido ao erro');
+              fs.copyFileSync(inputPath, outputPath);
+              fs.unlinkSync(inputPath);
+              resolve(outputPath);
+            } else {
+              reject(err);
+            }
+          })
+          .save(outputPath);
+          
+      } catch (error) {
+        console.error('❌ Erro ao obter informações do vídeo:', error.message);
+        // Se não conseguir obter info, fazer upscale padrão para 720p
+        console.log('📋 Aplicando upscale padrão para 720p...');
+        
+        ffmpeg(inputPath)
+          .videoCodec('libx264')
+          .audioCodec('aac')
+          .outputOptions([
+            '-preset medium',
+            '-crf 20',
+            '-vf scale=720:1280:flags=lanczos+accurate_rnd+full_chroma_int',
+            '-movflags +faststart',
+            '-pix_fmt yuv420p',
+            '-profile:v high',
+            '-level 4.0',
+            '-b:a 192k'
+          ])
+          .on('start', (commandLine) => {
+            console.log('🚀 FFmpeg iniciado (modo padrão):', commandLine);
+          })
+          .on('progress', (progress) => {
+            if (progress.percent) {
+              console.log(`⏳ Processando: ${Math.round(progress.percent)}%`);
+            }
+          })
+          .on('end', () => {
+            console.log('✅ Vídeo processado com sucesso!');
+            if (fs.existsSync(inputPath)) {
+              fs.unlinkSync(inputPath);
+            }
+            resolve(outputPath);
+          })
+          .on('error', (err) => {
+            console.error('❌ Erro ao processar vídeo:', err.message);
+            if (fs.existsSync(inputPath)) {
+              fs.copyFileSync(inputPath, outputPath);
+              fs.unlinkSync(inputPath);
+              resolve(outputPath);
+            } else {
+              reject(err);
+            }
+          })
+          .save(outputPath);
+      }
     });
   }
 
