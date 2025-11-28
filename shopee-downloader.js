@@ -211,16 +211,34 @@ class ShopeeDownloader {
                 if (typeof value === 'string') {
                   // Verificar se é uma URL de vídeo
                   if (/https?:\/\/[^\s"']+\.(mp4|webm|m3u8)/i.test(value)) {
-                    // Determinar qualidade pela URL
+                    // Determinar qualidade pela URL - procurar por múltiplos padrões
                     let quality = 'default';
-                    if (value.includes('1080') || value.includes('hd') || value.toLowerCase().includes('high') || value.toLowerCase().includes('original')) {
+                    const urlLower = value.toLowerCase();
+                    
+                    // Padrões para 1080p
+                    if (value.includes('1080') || urlLower.includes('hd') || urlLower.includes('high') || 
+                        urlLower.includes('original') || urlLower.includes('max') || urlLower.includes('best') ||
+                        urlLower.includes('quality_high') || urlLower.includes('q_high')) {
                       quality = '1080p';
-                    } else if (value.includes('720')) {
+                    } 
+                    // Padrões para 720p - mais abrangente
+                    else if (value.includes('720') || urlLower.includes('720p') || urlLower.includes('hd720') ||
+                             urlLower.includes('quality_medium') || urlLower.includes('q_medium') ||
+                             urlLower.includes('medium') || urlLower.includes('standard')) {
                       quality = '720p';
-                    } else if (value.includes('480')) {
+                    } 
+                    // Padrões para 480p
+                    else if (value.includes('480') || urlLower.includes('480p') || urlLower.includes('sd')) {
                       quality = '480p';
-                    } else if (value.includes('360')) {
+                    } 
+                    // Padrões para 360p
+                    else if (value.includes('360') || urlLower.includes('360p') || urlLower.includes('low')) {
                       quality = '360p';
+                    }
+                    // Se não encontrou padrão, mas está em campo de vídeo, assumir melhor qualidade
+                    else if (key.toLowerCase().includes('video') || key.toLowerCase().includes('url') || 
+                             key.toLowerCase().includes('source') || key.toLowerCase().includes('playback')) {
+                      quality = 'unknown'; // Será verificado depois
                     }
                     
                     foundUrls.push({ url: value, quality: quality, path: currentPath });
@@ -259,8 +277,25 @@ class ShopeeDownloader {
             return bQuality - aQuality;
           });
           
-          bestQualityUrl = allVideoUrls[0].url;
-          console.log(`✅ Melhor URL encontrada na API: ${allVideoUrls[0].quality} - ${bestQualityUrl.substring(0, 80)}`);
+          // Se temos URLs "unknown", tentar verificar a resolução real
+          // Mas primeiro, priorizar URLs conhecidas
+          const knownQualityUrls = allVideoUrls.filter(u => u.quality !== 'unknown');
+          const unknownQualityUrls = allVideoUrls.filter(u => u.quality === 'unknown');
+          
+          if (knownQualityUrls.length > 0) {
+            bestQualityUrl = knownQualityUrls[0].url;
+            console.log(`✅ Melhor URL encontrada na API: ${knownQualityUrls[0].quality} - ${bestQualityUrl.substring(0, 80)}`);
+          } else if (unknownQualityUrls.length > 0) {
+            // Se só temos URLs desconhecidas, usar a primeira (pode ser a melhor)
+            bestQualityUrl = unknownQualityUrls[0].url;
+            console.log(`⚠️ URL encontrada na API (qualidade desconhecida, será verificada): ${bestQualityUrl.substring(0, 80)}`);
+          }
+          
+          // Log de todas as URLs encontradas para debug
+          console.log(`📊 Total de URLs encontradas: ${allVideoUrls.length}`);
+          allVideoUrls.forEach((u, i) => {
+            console.log(`  ${i + 1}. ${u.quality}: ${u.path} - ${u.url.substring(0, 60)}...`);
+          });
         }
         
         // Se encontrou URL na API, usar ela (melhor qualidade)
@@ -374,23 +409,43 @@ class ShopeeDownloader {
         // Verificar também URLs encontradas nas requisições de rede
         let finalVideoUrl = videoUrl;
         if (networkRequests.length > 0) {
-          console.log('URLs encontradas nas requisições de rede:', networkRequests);
-          // Priorizar URLs que parecem ser de maior qualidade
-          const sortedUrls = networkRequests.sort((a, b) => {
-            const aIsHD = a.includes('1080') || a.includes('hd') || a.toLowerCase().includes('high');
-            const bIsHD = b.includes('1080') || b.includes('hd') || b.toLowerCase().includes('high');
-            const aIs720 = a.includes('720');
-            const bIs720 = b.includes('720');
-            if (aIsHD && !bIsHD) return -1;
-            if (!aIsHD && bIsHD) return 1;
-            if (aIs720 && !bIs720) return -1;
-            if (!aIs720 && bIs720) return 1;
-            return 0;
+          console.log('📡 URLs encontradas nas requisições de rede:', networkRequests.length);
+          // Priorizar URLs que parecem ser de maior qualidade - melhorado
+          const networkUrlsWithQuality = networkRequests.map(url => {
+            const urlLower = url.toLowerCase();
+            let quality = 'default';
+            if (url.includes('1080') || urlLower.includes('hd') || urlLower.includes('high') || 
+                urlLower.includes('original') || urlLower.includes('max') || urlLower.includes('best')) {
+              quality = '1080p';
+            } else if (url.includes('720') || urlLower.includes('720p') || urlLower.includes('hd720') ||
+                       urlLower.includes('medium') || urlLower.includes('standard')) {
+              quality = '720p';
+            } else if (url.includes('480') || urlLower.includes('480p') || urlLower.includes('sd')) {
+              quality = '480p';
+            } else if (url.includes('360') || urlLower.includes('360p') || urlLower.includes('low')) {
+              quality = '360p';
+            }
+            return { url, quality };
           });
+          
+          const qualityOrder = { '1080p': 5, '720p': 4, '480p': 3, '360p': 2, 'default': 1 };
+          networkUrlsWithQuality.sort((a, b) => {
+            const aQuality = qualityOrder[a.quality.toLowerCase()] || 0;
+            const bQuality = qualityOrder[b.quality.toLowerCase()] || 0;
+            return bQuality - aQuality;
+          });
+          
           // Se encontrou URLs de rede e não encontrou via evaluate, ou se a URL de rede parece melhor
-          if (!finalVideoUrl || (sortedUrls[0] && !finalVideoUrl.includes('1080') && !finalVideoUrl.includes('720'))) {
-            finalVideoUrl = sortedUrls[0];
-            console.log('Usando URL de rede (melhor qualidade):', finalVideoUrl);
+          if (!finalVideoUrl || (networkUrlsWithQuality[0] && 
+              (!finalVideoUrl.includes('1080') && !finalVideoUrl.includes('720') && 
+               !finalVideoUrl.includes('480') && !finalVideoUrl.includes('360')))) {
+            finalVideoUrl = networkUrlsWithQuality[0].url;
+            console.log(`✅ Usando URL de rede (${networkUrlsWithQuality[0].quality}):`, finalVideoUrl.substring(0, 80));
+          } else if (networkUrlsWithQuality[0] && networkUrlsWithQuality[0].quality === '720p' && 
+                     !finalVideoUrl.includes('720') && !finalVideoUrl.includes('1080')) {
+            // Se encontrou 720p na rede e a atual não é 720p ou 1080p, usar a de rede
+            finalVideoUrl = networkUrlsWithQuality[0].url;
+            console.log(`✅ Trocando para URL de rede 720p:`, finalVideoUrl.substring(0, 80));
           }
         }
 
@@ -477,6 +532,29 @@ class ShopeeDownloader {
     } catch (error) {
       console.error('Erro ao extrair URL do vídeo:', error);
       throw new Error(`Erro ao processar link da Shopee: ${error.message}`);
+    }
+  }
+
+  /**
+   * Verifica a resolução real de um vídeo sem baixar completamente
+   * Retorna a altura do vídeo (para determinar se é 720p, 1080p, etc)
+   */
+  async checkVideoResolution(videoUrl) {
+    try {
+      // Fazer uma requisição HEAD para obter headers
+      const headResponse = await axios.head(videoUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+          'Referer': 'https://shopee.com.br/'
+        },
+        timeout: 10000
+      });
+      
+      // Se o Content-Length estiver disponível, podemos estimar qualidade
+      // Mas o melhor é baixar uma pequena parte e verificar
+      return null; // Por enquanto retorna null, pode ser melhorado depois
+    } catch (e) {
+      return null;
     }
   }
 
@@ -682,6 +760,38 @@ class ShopeeDownloader {
       
       // Baixar vídeo
       const originalPath = await this.downloadVideo(videoUrl, originalFilename);
+      
+      // Verificar resolução real do vídeo baixado
+      try {
+        const videoInfo = await this.getVideoInfo(originalPath);
+        const height = videoInfo.height;
+        let detectedQuality = 'desconhecida';
+        
+        if (height >= 1080) {
+          detectedQuality = '1080p';
+        } else if (height >= 720) {
+          detectedQuality = '720p';
+        } else if (height >= 480) {
+          detectedQuality = '480p';
+        } else if (height >= 360) {
+          detectedQuality = '360p';
+        } else {
+          detectedQuality = `${height}p`;
+        }
+        
+        console.log(`📐 Resolução real do vídeo baixado: ${videoInfo.width}x${videoInfo.height} (${detectedQuality})`);
+        
+        // Se não for pelo menos 720p, avisar (mas não falhar)
+        if (height < 720) {
+          console.warn(`⚠️ ATENÇÃO: Vídeo baixado em ${detectedQuality}, não em 720p ou superior.`);
+          console.warn(`   Isso pode acontecer se a Shopee não disponibilizar vídeo em melhor qualidade para usuários não logados.`);
+          console.warn(`   Solução: Configure cookies de sessão via variável SHOPEE_COOKIES para acessar vídeos em melhor qualidade.`);
+        } else {
+          console.log(`✅ Vídeo baixado em ${detectedQuality} - qualidade adequada!`);
+        }
+      } catch (e) {
+        console.warn('⚠️ Não foi possível verificar resolução do vídeo:', e.message);
+      }
       
       // Melhorar qualidade do vídeo
       const enhancedPath = path.join(this.videosDir, enhancedFilename);
