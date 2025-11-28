@@ -3,9 +3,6 @@ nixPkgs = ["nodejs_20"]
 
 [phases.install]
 cmds = [
-  "npm config set fetch-retries 2",
-  "npm config set fetch-retry-mintimeout 20000",
-  "npm config set fetch-retry-maxtimeout 120000",
   "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm ci --prefer-offline --no-audit --legacy-peer-deps"
 ]
 
