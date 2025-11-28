@@ -30,10 +30,37 @@ class ShopeeDownloader {
       console.log('URL decodificada:', decodedUrl);
 
       // Usar Puppeteer para carregar a página e extrair o vídeo
-      const browser = await puppeteer.launch({
+      // Configuração otimizada para Railway
+      const launchOptions = {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-      });
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--single-process',
+          '--disable-gpu'
+        ]
+      };
+
+      // No Railway, usar Chromium do sistema (já instalado)
+      if (process.env.RAILWAY_ENVIRONMENT || process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD) {
+        // Tentar encontrar Chromium no sistema
+        const { execSync } = require('child_process');
+        try {
+          const chromiumPath = execSync('which google-chrome-stable || which chromium || which chromium-browser', { encoding: 'utf-8' }).trim();
+          if (chromiumPath) {
+            launchOptions.executablePath = chromiumPath;
+          }
+        } catch (e) {
+          // Se não encontrar, usar o padrão do Puppeteer
+          console.log('Usando Chromium do Puppeteer');
+        }
+      }
+
+      const browser = await puppeteer.launch(launchOptions);
 
       const page = await browser.newPage();
       
