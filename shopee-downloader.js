@@ -254,6 +254,22 @@ class ShopeeDownloader {
         }
       }
       
+      // Tentar adicionar cookies comuns da Shopee se não foram fornecidos
+      // Isso pode ajudar a parecer mais com um usuário real
+      try {
+        await page.setCookie({
+          name: 'SPC_EC',
+          value: '',
+          domain: '.shopee.com.br',
+          path: '/',
+          httpOnly: false,
+          secure: true,
+          sameSite: 'Lax'
+        });
+      } catch (e) {
+        // Ignorar se falhar
+      }
+      
       try {
         await page.goto(decodedUrl, { 
           waitUntil: 'networkidle2',
