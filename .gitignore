@@ -1,6 +1,6 @@
 # Dependências
 node_modules/
-package-lock.json
+# package-lock.json - MANTER no repositório (necessário para Railway)
 yarn.lock
 
 # Variáveis de ambiente
