@@ -117,18 +117,29 @@ class ShopeeDownloader {
         }
         
         // Interceptar requisições JSON da API da Shopee (múltiplos endpoints possíveis)
+        // Expandido para capturar mais endpoints que podem ter vídeo sem marca d'água
         const apiPatterns = [
           'get_item_detail',
           'api/v4/item',
           'api/v2/item',
           'api/v1/item',
+          'api/v3/item',
           'item/get',
           'item/detail',
           'product/detail',
           'video',
           'media',
           'cdn.shopee',
-          'shopee.com.br/api'
+          'shopee.com.br/api',
+          'shopee.com/api',
+          'mall/shopee',
+          'xshopee',
+          'seller',
+          'item_extra',
+          'video_info',
+          'video_url',
+          'original_video',
+          'raw_video'
         ];
         
         const isApiRequest = apiPatterns.some(pattern => url.includes(pattern));
@@ -136,21 +147,58 @@ class ShopeeDownloader {
         if (isApiRequest) {
           try {
             const contentType = response.headers()['content-type'] || '';
-            if (contentType.includes('application/json') || contentType.includes('text/json')) {
-              const jsonData = await response.json();
-              apiResponses.push({ url: url, data: jsonData });
-              console.log('✅ Resposta JSON da API capturada:', url.substring(0, 100));
+            const status = response.status();
+            
+            // Capturar headers importantes para debug
+            const headers = response.headers();
+            
+            if (contentType.includes('application/json') || contentType.includes('text/json') || status === 200) {
+              try {
+                const jsonData = await response.json();
+                apiResponses.push({ 
+                  url: url, 
+                  data: jsonData,
+                  headers: headers,
+                  status: status
+                });
+                console.log(`✅ API capturada [${status}]: ${url.substring(0, 100)}`);
+                
+                // Log especial se encontrar campos relacionados a vídeo
+                const jsonStr = JSON.stringify(jsonData);
+                if (jsonStr.toLowerCase().includes('video') || jsonStr.toLowerCase().includes('mp4') || 
+                    jsonStr.toLowerCase().includes('media') || jsonStr.toLowerCase().includes('url')) {
+                  console.log(`   🎥 Possível URL de vídeo nesta resposta!`);
+                }
+              } catch (e) {
+                // Tentar ler como texto e fazer parse manual
+                try {
+                  const text = await response.text();
+                  const jsonData = JSON.parse(text);
+                  apiResponses.push({ 
+                    url: url, 
+                    data: jsonData,
+                    headers: headers,
+                    status: status
+                  });
+                  console.log(`✅ API capturada (texto) [${status}]: ${url.substring(0, 100)}`);
+                } catch (e2) {
+                  // Ignorar erros ao ler JSON
+                }
+              }
             }
           } catch (e) {
-            // Tentar ler como texto e fazer parse manual
-            try {
-              const text = await response.text();
-              const jsonData = JSON.parse(text);
-              apiResponses.push({ url: url, data: jsonData });
-              console.log('✅ Resposta JSON da API capturada (texto):', url.substring(0, 100));
-            } catch (e2) {
-              // Ignorar erros ao ler JSON
-            }
+            // Ignorar erros
+          }
+        }
+        
+        // TAMBÉM interceptar requisições de vídeo diretamente (podem ter parâmetros especiais)
+        if (url.match(/\.(mp4|webm|m3u8)/i)) {
+          // Log detalhado da URL de vídeo encontrada
+          const urlObj = new URL(url);
+          const params = Array.from(urlObj.searchParams.entries());
+          console.log(`📹 URL de vídeo na rede: ${url.substring(0, 100)}`);
+          if (params.length > 0) {
+            console.log(`   Parâmetros: ${params.map(([k, v]) => `${k}=${v.substring(0, 30)}`).join(', ')}`);
           }
         }
       });
@@ -215,9 +263,16 @@ class ShopeeDownloader {
                     let quality = 'default';
                     const urlLower = value.toLowerCase();
                     
+                    // IMPORTANTE: Procurar por indicadores de vídeo SEM marca d'água
+                    // Padrões que podem indicar vídeo original/sem marca d'água:
+                    const isOriginal = urlLower.includes('original') || urlLower.includes('raw') || 
+                                      urlLower.includes('source') || urlLower.includes('master') ||
+                                      urlLower.includes('no_watermark') || urlLower.includes('nowm') ||
+                                      urlLower.includes('clean') || urlLower.includes('pure');
+                    
                     // Padrões para 1080p
                     if (value.includes('1080') || urlLower.includes('hd') || urlLower.includes('high') || 
-                        urlLower.includes('original') || urlLower.includes('max') || urlLower.includes('best') ||
+                        isOriginal || urlLower.includes('max') || urlLower.includes('best') ||
                         urlLower.includes('quality_high') || urlLower.includes('q_high')) {
                       quality = '1080p';
                     } 
@@ -237,12 +292,25 @@ class ShopeeDownloader {
                     }
                     // Se não encontrou padrão, mas está em campo de vídeo, assumir melhor qualidade
                     else if (key.toLowerCase().includes('video') || key.toLowerCase().includes('url') || 
-                             key.toLowerCase().includes('source') || key.toLowerCase().includes('playback')) {
-                      quality = 'unknown'; // Será verificado depois
+                             key.toLowerCase().includes('source') || key.toLowerCase().includes('playback') ||
+                             key.toLowerCase().includes('original') || key.toLowerCase().includes('raw') ||
+                             key.toLowerCase().includes('master') || isOriginal) {
+                      quality = 'unknown'; // Será verificado depois, mas pode ser de alta qualidade
                     }
                     
-                    foundUrls.push({ url: value, quality: quality, path: currentPath });
-                    console.log(`📹 URL de vídeo encontrada na API (${currentPath}, ${quality}):`, value.substring(0, 80));
+                    // Priorizar URLs que parecem ser originais/sem marca d'água
+                    const priority = isOriginal ? 1 : 0;
+                    
+                    foundUrls.push({ 
+                      url: value, 
+                      quality: quality, 
+                      path: currentPath,
+                      isOriginal: isOriginal,
+                      priority: priority
+                    });
+                    
+                    const originalMark = isOriginal ? ' [ORIGINAL/SEM MARCA D\'ÁGUA?]' : '';
+                    console.log(`📹 URL de vídeo encontrada na API (${currentPath}, ${quality})${originalMark}:`, value.substring(0, 80));
                   }
                   // Também procurar por campos que podem conter URLs de vídeo em objetos aninhados
                   // Ex: video_info.url, video.url, media.video_url, etc.
