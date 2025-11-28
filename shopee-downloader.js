@@ -227,20 +227,62 @@ class ShopeeDownloader {
 
         const $ = cheerio.load(response.data);
         
-        // Procurar por vídeo no HTML
-        const videoSrc = $('video').attr('src') || $('video source').attr('src');
-        if (videoSrc) {
-          return videoSrc.startsWith('http') ? videoSrc : new URL(videoSrc, decodedUrl).href;
-        }
-
-        // Procurar em scripts
-        $('script').each((i, elem) => {
-          const scriptContent = $(elem).html();
-          const match = scriptContent?.match(/https?:\/\/[^\s"']+\.(mp4|webm|m3u8)/i);
-          if (match) {
-            return match[0];
+        const videoUrls = [];
+        
+        // Procurar por múltiplas sources no HTML
+        $('video source').each((i, elem) => {
+          const src = $(elem).attr('src');
+          if (src) {
+            const quality = $(elem).attr('data-quality') || 
+                          $(elem).attr('data-res') || 
+                          $(elem).attr('label') || 
+                          'default';
+            const fullUrl = src.startsWith('http') ? src : new URL(src, decodedUrl).href;
+            videoUrls.push({ url: fullUrl, quality: quality });
           }
         });
+        
+        // Se não encontrou sources, tentar src direto do video
+        const videoSrc = $('video').attr('src');
+        if (videoSrc && videoUrls.length === 0) {
+          const fullUrl = videoSrc.startsWith('http') ? videoSrc : new URL(videoSrc, decodedUrl).href;
+          videoUrls.push({ url: fullUrl, quality: 'default' });
+        }
+
+        // Procurar em scripts (pode ter múltiplas qualidades)
+        $('script').each((i, elem) => {
+          const scriptContent = $(elem).html();
+          if (scriptContent) {
+            const matches = scriptContent.match(/https?:\/\/[^\s"']+\.(mp4|webm|m3u8)/gi);
+            if (matches) {
+              matches.forEach(url => {
+                let quality = 'default';
+                if (url.includes('1080') || url.includes('hd') || url.toLowerCase().includes('high')) {
+                  quality = '1080p';
+                } else if (url.includes('720')) {
+                  quality = '720p';
+                } else if (url.includes('480')) {
+                  quality = '480p';
+                } else if (url.includes('360')) {
+                  quality = '360p';
+                }
+                videoUrls.push({ url: url, quality: quality });
+              });
+            }
+          }
+        });
+        
+        if (videoUrls.length > 0) {
+          // Ordenar por qualidade e retornar a melhor
+          const qualityOrder = { '1080p': 5, '720p': 4, '480p': 3, '360p': 2, 'default': 1, 'unknown': 0 };
+          videoUrls.sort((a, b) => {
+            const aQuality = qualityOrder[a.quality.toLowerCase()] || 0;
+            const bQuality = qualityOrder[b.quality.toLowerCase()] || 0;
+            return bQuality - aQuality;
+          });
+          console.log('Vídeos encontrados (método alternativo):', videoUrls.map(v => `${v.quality}: ${v.url.substring(0, 50)}...`));
+          return videoUrls[0].url;
+        }
 
         throw new Error('Não foi possível encontrar a URL do vídeo');
 
