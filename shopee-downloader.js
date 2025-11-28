@@ -100,6 +100,16 @@ class ShopeeDownloader {
 
       const page = await browser.newPage();
       
+      // Monitorar requisições de rede para encontrar URLs de vídeo HD (ANTES de navegar)
+      const networkRequests = [];
+      page.on('response', async (response) => {
+        const url = response.url();
+        if (url.match(/\.(mp4|webm|m3u8)/i)) {
+          networkRequests.push(url);
+          console.log('URL de vídeo encontrada na rede:', url);
+        }
+      });
+      
       // Definir user agent para evitar bloqueios
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
       
@@ -111,15 +121,6 @@ class ShopeeDownloader {
 
         // Aguardar o vídeo carregar completamente (aumentar tempo para garantir HD)
         await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        // Monitorar requisições de rede para encontrar URLs de vídeo HD
-        const networkRequests = [];
-        page.on('response', async (response) => {
-          const url = response.url();
-          if (url.match(/\.(mp4|webm|m3u8)/i)) {
-            networkRequests.push(url);
-          }
-        });
 
         // Tentar encontrar o elemento de vídeo com melhor qualidade
         const videoUrl = await page.evaluate(() => {
@@ -223,44 +224,33 @@ class ShopeeDownloader {
         });
 
         // Verificar também URLs encontradas nas requisições de rede
+        let finalVideoUrl = videoUrl;
         if (networkRequests.length > 0) {
           console.log('URLs encontradas nas requisições de rede:', networkRequests);
-          // Adicionar URLs de rede à lista de vídeos encontrados
-          networkRequests.forEach(url => {
-            let quality = 'default';
-            if (url.includes('1080') || url.includes('hd') || url.toLowerCase().includes('high')) {
-              quality = '1080p';
-            } else if (url.includes('720')) {
-              quality = '720p';
-            } else if (url.includes('480')) {
-              quality = '480p';
-            }
-            // Adicionar à lista se não estiver já presente
-            if (!videoUrl || !videoUrl.includes(url)) {
-              // Será processado abaixo
-            }
-          });
-        }
-
-        await browser.close();
-
-        if (videoUrl) {
-          console.log('URL do vídeo encontrada:', videoUrl);
-          return videoUrl;
-        }
-        
-        // Se não encontrou via evaluate, tentar usar URLs de rede
-        if (networkRequests.length > 0) {
           // Priorizar URLs que parecem ser de maior qualidade
           const sortedUrls = networkRequests.sort((a, b) => {
             const aIsHD = a.includes('1080') || a.includes('hd') || a.toLowerCase().includes('high');
             const bIsHD = b.includes('1080') || b.includes('hd') || b.toLowerCase().includes('high');
+            const aIs720 = a.includes('720');
+            const bIs720 = b.includes('720');
             if (aIsHD && !bIsHD) return -1;
             if (!aIsHD && bIsHD) return 1;
+            if (aIs720 && !bIs720) return -1;
+            if (!aIs720 && bIs720) return 1;
             return 0;
           });
-          console.log('Usando URL de rede:', sortedUrls[0]);
-          return sortedUrls[0];
+          // Se encontrou URLs de rede e não encontrou via evaluate, ou se a URL de rede parece melhor
+          if (!finalVideoUrl || (sortedUrls[0] && !finalVideoUrl.includes('1080') && !finalVideoUrl.includes('720'))) {
+            finalVideoUrl = sortedUrls[0];
+            console.log('Usando URL de rede (melhor qualidade):', finalVideoUrl);
+          }
+        }
+
+        await browser.close();
+
+        if (finalVideoUrl) {
+          console.log('URL do vídeo encontrada (melhor qualidade):', finalVideoUrl);
+          return finalVideoUrl;
         }
 
         // Se não encontrou, tentar método alternativo com axios
