@@ -270,26 +270,20 @@ class ShopeeDownloader {
         
         // Ordenar todas as URLs encontradas por qualidade
         if (allVideoUrls.length > 0) {
-          const qualityOrder = { '1080p': 5, '720p': 4, '480p': 3, '360p': 2, 'default': 1, 'unknown': 0 };
+          // IMPORTANTE: URLs "unknown" podem ser de alta qualidade, só não têm padrão no nome
+          // Vamos tratá-las como potencialmente melhores que "default"
+          const qualityOrder = { '1080p': 6, '720p': 5, '480p': 4, '360p': 3, 'unknown': 2, 'default': 1 };
           allVideoUrls.sort((a, b) => {
             const aQuality = qualityOrder[a.quality.toLowerCase()] || 0;
             const bQuality = qualityOrder[b.quality.toLowerCase()] || 0;
             return bQuality - aQuality;
           });
           
-          // Se temos URLs "unknown", tentar verificar a resolução real
-          // Mas primeiro, priorizar URLs conhecidas
-          const knownQualityUrls = allVideoUrls.filter(u => u.quality !== 'unknown');
-          const unknownQualityUrls = allVideoUrls.filter(u => u.quality === 'unknown');
+          // Usar a primeira URL da lista ordenada (melhor qualidade)
+          // Se for "unknown", pode ser de alta qualidade, então vamos tentar
+          bestQualityUrl = allVideoUrls[0].url;
           
-          if (knownQualityUrls.length > 0) {
-            bestQualityUrl = knownQualityUrls[0].url;
-            console.log(`✅ Melhor URL encontrada na API: ${knownQualityUrls[0].quality} - ${bestQualityUrl.substring(0, 80)}`);
-          } else if (unknownQualityUrls.length > 0) {
-            // Se só temos URLs desconhecidas, usar a primeira (pode ser a melhor)
-            bestQualityUrl = unknownQualityUrls[0].url;
-            console.log(`⚠️ URL encontrada na API (qualidade desconhecida, será verificada): ${bestQualityUrl.substring(0, 80)}`);
-          }
+          console.log(`✅ Melhor URL encontrada na API: ${allVideoUrls[0].quality} - ${bestQualityUrl.substring(0, 80)}`);
           
           // Log de todas as URLs encontradas para debug
           console.log(`📊 Total de URLs encontradas: ${allVideoUrls.length}`);
@@ -435,17 +429,25 @@ class ShopeeDownloader {
             return bQuality - aQuality;
           });
           
-          // Se encontrou URLs de rede e não encontrou via evaluate, ou se a URL de rede parece melhor
-          if (!finalVideoUrl || (networkUrlsWithQuality[0] && 
-              (!finalVideoUrl.includes('1080') && !finalVideoUrl.includes('720') && 
-               !finalVideoUrl.includes('480') && !finalVideoUrl.includes('360')))) {
+          // Se encontrou URLs de rede e não encontrou via evaluate, usar a melhor de rede
+          if (!finalVideoUrl) {
             finalVideoUrl = networkUrlsWithQuality[0].url;
             console.log(`✅ Usando URL de rede (${networkUrlsWithQuality[0].quality}):`, finalVideoUrl.substring(0, 80));
-          } else if (networkUrlsWithQuality[0] && networkUrlsWithQuality[0].quality === '720p' && 
-                     !finalVideoUrl.includes('720') && !finalVideoUrl.includes('1080')) {
-            // Se encontrou 720p na rede e a atual não é 720p ou 1080p, usar a de rede
-            finalVideoUrl = networkUrlsWithQuality[0].url;
-            console.log(`✅ Trocando para URL de rede 720p:`, finalVideoUrl.substring(0, 80));
+          } 
+          // Se encontrou via evaluate mas a URL de rede tem qualidade claramente melhor, usar a de rede
+          else if (networkUrlsWithQuality[0]) {
+            const networkQuality = networkUrlsWithQuality[0].quality;
+            const currentHasQuality = finalVideoUrl.includes('1080') || finalVideoUrl.includes('720') || 
+                                     finalVideoUrl.includes('480') || finalVideoUrl.includes('360');
+            
+            // Só trocar se a URL de rede tiver qualidade conhecida E melhor que a atual
+            if ((networkQuality === '1080p' || networkQuality === '720p') && !currentHasQuality) {
+              finalVideoUrl = networkUrlsWithQuality[0].url;
+              console.log(`✅ Trocando para URL de rede (${networkQuality}):`, finalVideoUrl.substring(0, 80));
+            } else if (networkQuality === '1080p' && !finalVideoUrl.includes('1080')) {
+              finalVideoUrl = networkUrlsWithQuality[0].url;
+              console.log(`✅ Trocando para URL de rede 1080p:`, finalVideoUrl.substring(0, 80));
+            }
           }
         }
 
