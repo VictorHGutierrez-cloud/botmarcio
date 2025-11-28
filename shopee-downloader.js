@@ -110,32 +110,105 @@ class ShopeeDownloader {
         // Aguardar o vídeo carregar (waitForTimeout foi removido, usar Promise com setTimeout)
         await new Promise(resolve => setTimeout(resolve, 3000));
 
-        // Tentar encontrar o elemento de vídeo
+        // Tentar encontrar o elemento de vídeo com melhor qualidade
         const videoUrl = await page.evaluate(() => {
-          // Procurar por tag <video>
+          const videoUrls = [];
+          
+          // 1. Procurar por múltiplas sources no elemento <video>
           const videoElement = document.querySelector('video');
-          if (videoElement && videoElement.src) {
-            return videoElement.src;
+          if (videoElement) {
+            // Verificar src direto
+            if (videoElement.src) {
+              videoUrls.push({ url: videoElement.src, quality: 'default' });
+            }
+            
+            // Verificar todas as sources (podem ter diferentes qualidades)
+            const sources = videoElement.querySelectorAll('source');
+            sources.forEach(source => {
+              if (source.src) {
+                const quality = source.getAttribute('data-quality') || 
+                              source.getAttribute('data-res') || 
+                              source.getAttribute('label') || 
+                              'unknown';
+                videoUrls.push({ url: source.src, quality: quality });
+              }
+            });
           }
 
-          // Procurar por source dentro de video
-          const sourceElement = document.querySelector('video source');
-          if (sourceElement && sourceElement.src) {
-            return sourceElement.src;
-          }
-
-          // Procurar em scripts ou dados JSON
+          // 2. Procurar em scripts ou dados JSON (pode ter múltiplas qualidades)
           const scripts = document.querySelectorAll('script');
           for (let script of scripts) {
             const content = script.textContent || script.innerHTML;
-            // Procurar por URLs de vídeo comuns
-            const videoUrlMatch = content.match(/https?:\/\/[^\s"']+\.(mp4|webm|m3u8)/i);
-            if (videoUrlMatch) {
-              return videoUrlMatch[0];
+            
+            // Procurar por objetos JSON com informações de vídeo
+            try {
+              // Tentar encontrar JSON com informações de vídeo
+              const jsonMatch = content.match(/\{[^}]*"(?:video|url|src|source|playback|stream)[^}]*\}/gi);
+              if (jsonMatch) {
+                jsonMatch.forEach(jsonStr => {
+                  try {
+                    const data = JSON.parse(jsonStr);
+                    // Procurar por URLs de vídeo no JSON
+                    const findVideoUrls = (obj) => {
+                      for (let key in obj) {
+                        if (typeof obj[key] === 'string' && /https?:\/\/[^\s"']+\.(mp4|webm|m3u8)/i.test(obj[key])) {
+                          const quality = key.toLowerCase().includes('hd') || key.toLowerCase().includes('1080') ? '1080p' :
+                                         key.toLowerCase().includes('720') ? '720p' :
+                                         key.toLowerCase().includes('480') ? '480p' :
+                                         key.toLowerCase().includes('360') ? '360p' : 'default';
+                          videoUrls.push({ url: obj[key], quality: quality });
+                        } else if (typeof obj[key] === 'object') {
+                          findVideoUrls(obj[key]);
+                        }
+                      }
+                    };
+                    findVideoUrls(data);
+                  } catch (e) {
+                    // Continuar procurando
+                  }
+                });
+              }
+              
+              // Procurar por URLs de vídeo diretamente
+              const videoUrlMatches = content.match(/https?:\/\/[^\s"']+\.(mp4|webm|m3u8)/gi);
+              if (videoUrlMatches) {
+                videoUrlMatches.forEach(url => {
+                  // Tentar determinar qualidade pela URL
+                  let quality = 'default';
+                  if (url.includes('1080') || url.includes('hd') || url.toLowerCase().includes('high')) {
+                    quality = '1080p';
+                  } else if (url.includes('720')) {
+                    quality = '720p';
+                  } else if (url.includes('480')) {
+                    quality = '480p';
+                  } else if (url.includes('360')) {
+                    quality = '360p';
+                  }
+                  videoUrls.push({ url: url, quality: quality });
+                });
+              }
+            } catch (e) {
+              // Continuar procurando
             }
           }
 
-          return null;
+          // 3. Priorizar maior qualidade
+          if (videoUrls.length === 0) {
+            return null;
+          }
+
+          // Ordenar por qualidade (1080p > 720p > 480p > 360p > default)
+          const qualityOrder = { '1080p': 5, '720p': 4, '480p': 3, '360p': 2, 'default': 1, 'unknown': 0 };
+          videoUrls.sort((a, b) => {
+            const aQuality = qualityOrder[a.quality.toLowerCase()] || 0;
+            const bQuality = qualityOrder[b.quality.toLowerCase()] || 0;
+            return bQuality - aQuality;
+          });
+
+          console.log('Vídeos encontrados:', videoUrls.map(v => `${v.quality}: ${v.url.substring(0, 50)}...`));
+          
+          // Retornar a melhor qualidade
+          return videoUrls[0].url;
         });
 
         await browser.close();
