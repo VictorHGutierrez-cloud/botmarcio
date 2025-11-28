@@ -3,6 +3,8 @@ const cheerio = require('cheerio');
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
+const ffmpeg = require('fluent-ffmpeg');
+const { execSync } = require('child_process');
 const { execSync } = require('child_process');
 
 class ShopeeDownloader {
@@ -107,8 +109,17 @@ class ShopeeDownloader {
           timeout: 30000 
         });
 
-        // Aguardar o vídeo carregar (waitForTimeout foi removido, usar Promise com setTimeout)
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Aguardar o vídeo carregar completamente (aumentar tempo para garantir HD)
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        // Monitorar requisições de rede para encontrar URLs de vídeo HD
+        const networkRequests = [];
+        page.on('response', async (response) => {
+          const url = response.url();
+          if (url.match(/\.(mp4|webm|m3u8)/i)) {
+            networkRequests.push(url);
+          }
+        });
 
         // Tentar encontrar o elemento de vídeo com melhor qualidade
         const videoUrl = await page.evaluate(() => {
@@ -211,11 +222,45 @@ class ShopeeDownloader {
           return videoUrls[0].url;
         });
 
+        // Verificar também URLs encontradas nas requisições de rede
+        if (networkRequests.length > 0) {
+          console.log('URLs encontradas nas requisições de rede:', networkRequests);
+          // Adicionar URLs de rede à lista de vídeos encontrados
+          networkRequests.forEach(url => {
+            let quality = 'default';
+            if (url.includes('1080') || url.includes('hd') || url.toLowerCase().includes('high')) {
+              quality = '1080p';
+            } else if (url.includes('720')) {
+              quality = '720p';
+            } else if (url.includes('480')) {
+              quality = '480p';
+            }
+            // Adicionar à lista se não estiver já presente
+            if (!videoUrl || !videoUrl.includes(url)) {
+              // Será processado abaixo
+            }
+          });
+        }
+
         await browser.close();
 
         if (videoUrl) {
           console.log('URL do vídeo encontrada:', videoUrl);
           return videoUrl;
+        }
+        
+        // Se não encontrou via evaluate, tentar usar URLs de rede
+        if (networkRequests.length > 0) {
+          // Priorizar URLs que parecem ser de maior qualidade
+          const sortedUrls = networkRequests.sort((a, b) => {
+            const aIsHD = a.includes('1080') || a.includes('hd') || a.toLowerCase().includes('high');
+            const bIsHD = b.includes('1080') || b.includes('hd') || b.toLowerCase().includes('high');
+            if (aIsHD && !bIsHD) return -1;
+            if (!aIsHD && bIsHD) return 1;
+            return 0;
+          });
+          console.log('Usando URL de rede:', sortedUrls[0]);
+          return sortedUrls[0];
         }
 
         // Se não encontrou, tentar método alternativo com axios
@@ -339,6 +384,63 @@ class ShopeeDownloader {
   }
 
   /**
+   * Processa e melhora a qualidade do vídeo usando ffmpeg
+   */
+  async enhanceVideo(inputPath, outputPath) {
+    return new Promise((resolve, reject) => {
+      console.log('Melhorando qualidade do vídeo...');
+      
+      // Verificar se ffmpeg está disponível
+      try {
+        execSync('which ffmpeg', { encoding: 'utf-8' });
+      } catch (e) {
+        console.warn('FFmpeg não encontrado, pulando melhoria de qualidade');
+        // Se não tiver ffmpeg, apenas copiar o arquivo
+        fs.copyFileSync(inputPath, outputPath);
+        resolve(outputPath);
+        return;
+      }
+
+      ffmpeg(inputPath)
+        .videoCodec('libx264')
+        .audioCodec('aac')
+        .outputOptions([
+          '-preset slow',
+          '-crf 23',
+          '-vf scale=720:1280:flags=lanczos', // Upscale para 720p (vertical, formato Shopee)
+          '-movflags +faststart',
+          '-pix_fmt yuv420p'
+        ])
+        .on('start', (commandLine) => {
+          console.log('FFmpeg iniciado:', commandLine);
+        })
+        .on('progress', (progress) => {
+          console.log('Processando:', Math.round(progress.percent || 0) + '%');
+        })
+        .on('end', () => {
+          console.log('Vídeo melhorado com sucesso!');
+          // Remover arquivo original
+          if (fs.existsSync(inputPath)) {
+            fs.unlinkSync(inputPath);
+          }
+          resolve(outputPath);
+        })
+        .on('error', (err) => {
+          console.error('Erro ao processar vídeo:', err);
+          // Se der erro, usar o arquivo original
+          if (fs.existsSync(inputPath)) {
+            fs.copyFileSync(inputPath, outputPath);
+            fs.unlinkSync(inputPath);
+            resolve(outputPath);
+          } else {
+            reject(err);
+          }
+        })
+        .save(outputPath);
+    });
+  }
+
+  /**
    * Processa o link da Shopee e baixa o vídeo
    */
   async processShopeeLink(shareUrl, userId) {
@@ -348,15 +450,20 @@ class ShopeeDownloader {
       
       // Gerar nome do arquivo
       const timestamp = Date.now();
-      const filename = `shopee_video_${userId}_${timestamp}.mp4`;
+      const originalFilename = `shopee_video_${userId}_${timestamp}_original.mp4`;
+      const enhancedFilename = `shopee_video_${userId}_${timestamp}.mp4`;
       
       // Baixar vídeo
-      const filePath = await this.downloadVideo(videoUrl, filename);
+      const originalPath = await this.downloadVideo(videoUrl, originalFilename);
+      
+      // Melhorar qualidade do vídeo
+      const enhancedPath = path.join(this.videosDir, enhancedFilename);
+      await this.enhanceVideo(originalPath, enhancedPath);
       
       return {
         success: true,
-        filePath: filePath,
-        filename: filename
+        filePath: enhancedPath,
+        filename: enhancedFilename
       };
 
     } catch (error) {

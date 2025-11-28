@@ -3,6 +3,7 @@ nixPkgs = ["nodejs_20"]
 
 [phases.install]
 cmds = [
+  "sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg || true",
   "export npm_config_cache=/tmp/.npm-cache",
   "npm ci --prefer-offline --no-audit --legacy-peer-deps"
 ]
