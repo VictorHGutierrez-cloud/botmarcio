@@ -5,7 +5,6 @@ const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const { execSync } = require('child_process');
-const { execSync } = require('child_process');
 
 class ShopeeDownloader {
   constructor() {
