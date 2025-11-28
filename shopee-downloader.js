@@ -47,12 +47,17 @@ class ShopeeDownloader {
       };
 
       // No Railway, usar Chromium do sistema (já instalado via apt)
-      if (process.env.RAILWAY_ENVIRONMENT || process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD) {
+      // Primeiro, verificar se há um caminho especificado via variável de ambiente
+      if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+        launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+        console.log(`Usando Chromium da variável de ambiente: ${launchOptions.executablePath}`);
+      } else if (process.env.RAILWAY_ENVIRONMENT || process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD) {
         // Tentar encontrar Chromium em caminhos comuns do sistema
         const possiblePaths = [
           '/usr/bin/chromium',
           '/usr/bin/chromium-browser',
           '/usr/bin/google-chrome-stable',
+          '/usr/bin/google-chrome',
           '/snap/bin/chromium'
         ];
         
@@ -60,9 +65,13 @@ class ShopeeDownloader {
         for (const path of possiblePaths) {
           try {
             if (fs.existsSync(path)) {
-              chromiumPath = path;
-              console.log(`Chromium encontrado em: ${path}`);
-              break;
+              // Verificar se é um executável válido (não um script wrapper)
+              const stats = fs.statSync(path);
+              if (stats.isFile() && (stats.mode & parseInt('111', 8))) {
+                chromiumPath = path;
+                console.log(`Chromium encontrado em: ${path}`);
+                break;
+              }
             }
           } catch (e) {
             // Continuar procurando
@@ -78,14 +87,14 @@ class ShopeeDownloader {
               console.log(`Chromium encontrado via which: ${chromiumPath}`);
             }
           } catch (e) {
-            console.log('Chromium não encontrado via which, tentando caminhos padrão');
+            console.log('Chromium não encontrado via which');
           }
         }
         
         if (chromiumPath) {
           launchOptions.executablePath = chromiumPath;
         } else {
-          console.warn('Chromium não encontrado no sistema. Tentando usar o padrão do Puppeteer.');
+          console.warn('Chromium não encontrado no sistema. Tentando usar o padrão do Puppeteer (pode falhar se não houver Chromium instalado).');
         }
       }
 
