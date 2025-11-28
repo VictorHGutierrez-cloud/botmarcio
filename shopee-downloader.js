@@ -49,7 +49,6 @@ class ShopeeDownloader {
       // No Railway, usar Chromium do sistema (já instalado)
       if (process.env.RAILWAY_ENVIRONMENT || process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD) {
         // Tentar encontrar Chromium no sistema
-        const { execSync } = require('child_process');
         try {
           const chromiumPath = execSync('which google-chrome-stable || which chromium || which chromium-browser', { encoding: 'utf-8' }).trim();
           if (chromiumPath) {
