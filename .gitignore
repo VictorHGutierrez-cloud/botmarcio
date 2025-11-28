@@ -1,0 +1,66 @@
+# Dependências
+node_modules/
+package-lock.json
+yarn.lock
+
+# Variáveis de ambiente
+.env
+
+# Banco de dados
+*.db
+*.sqlite
+*.sqlite3
+
+# Downloads
+downloads/
+*.mp4
+*.webm
+*.m3u8
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Puppeteer
+.local-chromium/
+
+# Arquivos antigos/desnecessários
+bootstrap.min.css
+font-roboto.css
+telegram.css
+main.js
+tgwallpaper.min.js
+novo*.txt
+
+# Documentação de vendas/organização (não necessária no repositório)
+MANUAL_CLIENTE.md
+MENSAGEM_ENTREGA.txt
+PROPOSTA_VALOR.md
+SCRIPT_VENDA.md
+GUIA_ENTREGA_CLIENTE.md
+CHECKLIST_IMPLANTACAO.md
+COMO_CRIAR_PACOTE.md
+ESTRUTURA_ENTREGA.md
+README_ENTREGA.md
+RESUMO_ENTREGA.md
+COMECE_AQUI.md
+INDICE_DOCUMENTACAO.md
+
+# Documentação de escalabilidade (manter local)
+COMECE_ESCALAR.md
+RESUMO_ESCALABILIDADE.md
+GUIA_HOSPEDAGEM_NUVEM.md
+MODELOS_NEGOCIO_ESCALAVEIS.md
+ESTRATEGIA_ESCALAVEL.md
+TERMOS_USO.md
+
