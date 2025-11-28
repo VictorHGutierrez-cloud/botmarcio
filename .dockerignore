@@ -1,0 +1,49 @@
+# Dependências (serão instaladas durante o build)
+node_modules/
+npm-debug.log*
+
+# Downloads e arquivos de mídia
+downloads/
+*.mp4
+*.webm
+*.m3u8
+
+# Banco de dados
+*.db
+*.sqlite
+*.sqlite3
+
+# Variáveis de ambiente
+.env
+
+# Puppeteer
+.local-chromium/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Arquivos antigos/desnecessários
+bootstrap.min.css
+font-roboto.css
+telegram.css
+main.js
+tgwallpaper.min.js
+novo*.txt
+
+# Documentação (não necessária no deploy)
+*.md
+!README.md
+MENSAGEM_ENTREGA.txt
+image/
+
+# Git
+.git/
+.gitignore
+
