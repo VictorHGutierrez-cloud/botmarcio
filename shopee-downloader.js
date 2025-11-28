@@ -879,6 +879,139 @@ class ShopeeDownloader {
    * Otimiza o vídeo usando ffmpeg SEM alterar a resolução (sem upscaling)
    * Apenas melhora codec, compatibilidade e qualidade de encoding
    */
+  /**
+   * Remove marca d'água do vídeo usando FFmpeg
+   * Tenta várias técnicas: crop, delogo, overlay
+   */
+  async removeWatermark(inputPath, outputPath) {
+    return new Promise(async (resolve, reject) => {
+      console.log('🎨 Tentando remover marca d'água do vídeo...');
+      
+      try {
+        // Primeiro, obter informações do vídeo para saber onde pode estar a marca d'água
+        const videoInfo = await this.getVideoInfo(inputPath);
+        const width = videoInfo.width;
+        const height = videoInfo.height;
+        
+        console.log(`📐 Dimensões do vídeo: ${width}x${height}`);
+        
+        // Técnicas para remover marca d'água (geralmente fica nos cantos)
+        // Vamos tentar múltiplas técnicas e usar a que funcionar melhor
+        
+        // TÉCNICA 1: Delogo - Remove logo/marca d'água de uma região específica
+        // A marca d'água da Shopee geralmente fica no canto inferior direito
+        // Vamos tentar remover de várias posições possíveis
+        
+        const delogoFilters = [];
+        
+        // Canto inferior direito (mais comum)
+        const logoSize = Math.min(width, height) * 0.15; // ~15% do tamanho menor
+        const x = width - logoSize - 10;
+        const y = height - logoSize - 10;
+        delogoFilters.push(`delogo=x=${x}:y=${y}:w=${logoSize}:h=${logoSize}`);
+        
+        // Canto inferior esquerdo (caso alternativo)
+        delogoFilters.push(`delogo=x=10:y=${height - logoSize - 10}:w=${logoSize}:h=${logoSize}`);
+        
+        // Canto superior direito
+        delogoFilters.push(`delogo=x=${width - logoSize - 10}:y=10:w=${logoSize}:h=${logoSize}`);
+        
+        // TÉCNICA 2: Crop inteligente - Cortar bordas onde geralmente fica marca d'água
+        // Mas manter a maior parte do vídeo
+        const cropMargin = Math.min(width, height) * 0.05; // 5% de margem
+        
+        // TÉCNICA 3: Overlay com blur - Cobrir a marca d'água com blur
+        const blurOverlay = `[0:v]crop=${logoSize}:${logoSize}:${x}:${y},boxblur=10[blurred];[0:v][blurred]overlay=${x}:${y}`;
+        
+        // Vamos tentar a técnica mais simples primeiro: delogo no canto inferior direito
+        const filterComplex = delogoFilters[0];
+        
+        console.log(`🔧 Aplicando filtro delogo na região: x=${x}, y=${y}, w=${logoSize}, h=${logoSize}`);
+        
+        ffmpeg(inputPath)
+          .videoFilters([
+            {
+              filter: 'delogo',
+              options: {
+                x: Math.round(x),
+                y: Math.round(y),
+                w: Math.round(logoSize),
+                h: Math.round(logoSize)
+              }
+            }
+          ])
+          .videoCodec('libx264')
+          .audioCodec('copy') // Manter áudio original
+          .outputOptions([
+            '-preset medium',
+            '-crf 20',
+            '-movflags +faststart',
+            '-pix_fmt yuv420p'
+          ])
+          .on('start', (commandLine) => {
+            console.log('🚀 FFmpeg iniciado (remoção de marca d'água):', commandLine.substring(0, 100) + '...');
+          })
+          .on('progress', (progress) => {
+            if (progress.percent) {
+              console.log(`⏳ Removendo marca d'água: ${Math.round(progress.percent)}%`);
+            }
+          })
+          .on('end', () => {
+            console.log('✅ Marca d'água removida com sucesso!');
+            resolve(outputPath);
+          })
+          .on('error', (err) => {
+            console.warn('⚠️ Erro ao remover marca d'água com delogo:', err.message);
+            console.log('📋 Tentando técnica alternativa: crop inteligente...');
+            
+            // TÉCNICA ALTERNATIVA: Crop (mais simples, mas pode cortar parte do vídeo)
+            // Só cortar uma pequena margem inferior onde geralmente fica a marca
+            const cropHeight = height - Math.round(logoSize);
+            
+            ffmpeg(inputPath)
+              .videoFilters([
+                {
+                  filter: 'crop',
+                  options: {
+                    w: width,
+                    h: cropHeight,
+                    x: 0,
+                    y: 0
+                  }
+                }
+              ])
+              .videoCodec('libx264')
+              .audioCodec('copy')
+              .outputOptions([
+                '-preset medium',
+                '-crf 20',
+                '-movflags +faststart',
+                '-pix_fmt yuv420p'
+              ])
+              .on('end', () => {
+                console.log('✅ Marca d'água removida usando crop!');
+                resolve(outputPath);
+              })
+              .on('error', (err2) => {
+                console.warn('⚠️ Erro ao remover marca d'água:', err2.message);
+                // Se falhar, copiar o arquivo original
+                console.log('📋 Usando vídeo original (sem remoção de marca d'água)');
+                fs.copyFileSync(inputPath, outputPath);
+                resolve(outputPath);
+              })
+              .save(outputPath);
+          })
+          .save(outputPath);
+          
+      } catch (error) {
+        console.error('❌ Erro ao processar remoção de marca d'água:', error.message);
+        // Se der erro, copiar o arquivo original
+        fs.copyFileSync(inputPath, outputPath);
+        resolve(outputPath);
+      }
+    });
+  }
+
   async enhanceVideo(inputPath, outputPath) {
     return new Promise(async (resolve, reject) => {
       console.log('🎬 Iniciando otimização do vídeo (sem alterar resolução)...');
@@ -1045,15 +1178,22 @@ class ShopeeDownloader {
         console.warn('⚠️ Não foi possível verificar resolução do vídeo:', e.message);
       }
       
-      // Melhorar qualidade do vídeo
-      const enhancedPath = path.join(this.videosDir, enhancedFilename);
-      await this.enhanceVideo(originalPath, enhancedPath);
-      
-      return {
-        success: true,
-        filePath: enhancedPath,
-        filename: enhancedFilename
-      };
+        // Melhorar qualidade do vídeo
+        const enhancedPath = path.join(this.videosDir, enhancedFilename);
+        await this.enhanceVideo(originalPath, enhancedPath);
+        
+        // REMOVER MARCA D'ÁGUA (como o bot concorrente faz!)
+        const noWatermarkFilename = `shopee_video_${userId}_${timestamp}_nowm.mp4`;
+        const noWatermarkPath = path.join(this.videosDir, noWatermarkFilename);
+        console.log('🎨 Iniciando remoção de marca d'água...');
+        await this.removeWatermark(enhancedPath, noWatermarkPath);
+        
+        // Usar o vídeo sem marca d'água como final
+        return {
+          success: true,
+          filePath: noWatermarkPath,
+          filename: noWatermarkFilename
+        };
 
     } catch (error) {
       console.error('Erro ao processar link da Shopee:', error);
