@@ -885,7 +885,7 @@ class ShopeeDownloader {
    */
   async removeWatermark(inputPath, outputPath) {
     return new Promise(async (resolve, reject) => {
-      console.log('🎨 Tentando remover marca d'água do vídeo...');
+      console.log('🎨 Tentando remover marca d\'água do vídeo...');
       
       try {
         // Primeiro, obter informações do vídeo para saber onde pode estar a marca d'água
@@ -949,19 +949,19 @@ class ShopeeDownloader {
             '-pix_fmt yuv420p'
           ])
           .on('start', (commandLine) => {
-            console.log('🚀 FFmpeg iniciado (remoção de marca d'água):', commandLine.substring(0, 100) + '...');
+            console.log('🚀 FFmpeg iniciado (remoção de marca d\'água):', commandLine.substring(0, 100) + '...');
           })
           .on('progress', (progress) => {
             if (progress.percent) {
-              console.log(`⏳ Removendo marca d'água: ${Math.round(progress.percent)}%`);
+              console.log(`⏳ Removendo marca d\'água: ${Math.round(progress.percent)}%`);
             }
           })
           .on('end', () => {
-            console.log('✅ Marca d'água removida com sucesso!');
+            console.log('✅ Marca d\'água removida com sucesso!');
             resolve(outputPath);
           })
           .on('error', (err) => {
-            console.warn('⚠️ Erro ao remover marca d'água com delogo:', err.message);
+            console.warn('⚠️ Erro ao remover marca d\'água com delogo:', err.message);
             console.log('📋 Tentando técnica alternativa: crop inteligente...');
             
             // TÉCNICA ALTERNATIVA: Crop (mais simples, mas pode cortar parte do vídeo)
@@ -989,13 +989,13 @@ class ShopeeDownloader {
                 '-pix_fmt yuv420p'
               ])
               .on('end', () => {
-                console.log('✅ Marca d'água removida usando crop!');
+                console.log('✅ Marca d\'água removida usando crop!');
                 resolve(outputPath);
               })
               .on('error', (err2) => {
-                console.warn('⚠️ Erro ao remover marca d'água:', err2.message);
+                console.warn('⚠️ Erro ao remover marca d\'água:', err2.message);
                 // Se falhar, copiar o arquivo original
-                console.log('📋 Usando vídeo original (sem remoção de marca d'água)');
+                console.log('📋 Usando vídeo original (sem remoção de marca d\'água)');
                 fs.copyFileSync(inputPath, outputPath);
                 resolve(outputPath);
               })
@@ -1004,7 +1004,7 @@ class ShopeeDownloader {
           .save(outputPath);
           
       } catch (error) {
-        console.error('❌ Erro ao processar remoção de marca d'água:', error.message);
+        console.error('❌ Erro ao processar remoção de marca d\'água:', error.message);
         // Se der erro, copiar o arquivo original
         fs.copyFileSync(inputPath, outputPath);
         resolve(outputPath);
@@ -1185,7 +1185,7 @@ class ShopeeDownloader {
         // REMOVER MARCA D'ÁGUA (como o bot concorrente faz!)
         const noWatermarkFilename = `shopee_video_${userId}_${timestamp}_nowm.mp4`;
         const noWatermarkPath = path.join(this.videosDir, noWatermarkFilename);
-        console.log('🎨 Iniciando remoção de marca d'água...');
+        console.log('🎨 Iniciando remoção de marca d\'água...');
         await this.removeWatermark(enhancedPath, noWatermarkPath);
         
         // Usar o vídeo sem marca d'água como final
