@@ -107,8 +107,8 @@ class ShopeeDownloader {
           timeout: 30000 
         });
 
-        // Aguardar o vídeo carregar
-        await page.waitForTimeout(3000);
+        // Aguardar o vídeo carregar (waitForTimeout foi removido, usar Promise com setTimeout)
+        await new Promise(resolve => setTimeout(resolve, 3000));
 
         // Tentar encontrar o elemento de vídeo
         const videoUrl = await page.evaluate(() => {
