@@ -3,6 +3,8 @@ nixPkgs = ["nodejs_20"]
 
 [phases.install]
 cmds = [
+  "npm config set cache /tmp/.npm-cache",
+  "rm -rf /app/node_modules/.cache || true",
   "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm ci --prefer-offline --no-audit --legacy-peer-deps"
 ]
 
