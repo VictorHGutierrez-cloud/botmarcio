@@ -485,12 +485,20 @@ class ShopeeDownloader {
         let finalVideoUrl = null;
         if (allVideoUrls.length > 0) {
           // IMPORTANTE: URLs "unknown" podem ser de alta qualidade, só não têm padrão no nome
-          // Vamos tratá-las como potencialmente melhores que "default"
+          // PRIORIZAR URLs que parecem ser originais/sem marca d'água
           const qualityOrder = { '1080p': 6, '720p': 5, '480p': 4, '360p': 3, 'unknown': 2, 'default': 1 };
           allVideoUrls.sort((a, b) => {
+            // Primeiro: priorizar URLs que parecem ser originais/sem marca d'água
+            if (a.isOriginal && !b.isOriginal) return -1;
+            if (!a.isOriginal && b.isOriginal) return 1;
+            
+            // Segundo: priorizar por qualidade conhecida
             const aQuality = qualityOrder[a.quality.toLowerCase()] || 0;
             const bQuality = qualityOrder[b.quality.toLowerCase()] || 0;
-            return bQuality - aQuality;
+            if (aQuality !== bQuality) return bQuality - aQuality;
+            
+            // Terceiro: se mesma qualidade, manter ordem original (primeira encontrada pode ser melhor)
+            return 0;
           });
           
           // Remover duplicatas (mesma URL)
