@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const { execSync } = require('child_process');
+const FormData = require('form-data');
 
 // Usar plugin stealth para evitar detecção de bot
 puppeteer.use(StealthPlugin());
@@ -880,10 +881,130 @@ class ShopeeDownloader {
    * Apenas melhora codec, compatibilidade e qualidade de encoding
    */
   /**
-   * Remove marca d'água do vídeo usando FFmpeg
-   * Tenta várias técnicas: crop, delogo, overlay
+   * Remove marca d'água do vídeo
+   * Tenta múltiplas estratégias:
+   * 1. Serviço externo (se configurado)
+   * 2. Serviço local na VM (se configurado)
+   * 3. FFmpeg local (fallback)
    */
   async removeWatermark(inputPath, outputPath) {
+    // Verificar se há serviço externo configurado
+    if (process.env.WATERMARK_REMOVAL_API) {
+      console.log('🌐 Tentando remover marca d\'água via serviço externo...');
+      try {
+        return await this.removeWatermarkExternal(inputPath, outputPath);
+      } catch (e) {
+        console.warn('⚠️ Serviço externo falhou, tentando método local:', e.message);
+      }
+    }
+    
+    // Verificar se há serviço local na VM configurado
+    if (process.env.WATERMARK_REMOVAL_LOCAL_URL) {
+      console.log('🖥️ Tentando remover marca d\'água via serviço local na VM...');
+      try {
+        return await this.removeWatermarkLocalService(inputPath, outputPath);
+      } catch (e) {
+        console.warn('⚠️ Serviço local falhou, tentando FFmpeg:', e.message);
+      }
+    }
+    
+    // Fallback: usar FFmpeg local
+    return await this.removeWatermarkFFmpeg(inputPath, outputPath);
+  }
+
+  /**
+   * Remove marca d'água via serviço externo (API)
+   */
+  async removeWatermarkExternal(inputPath, outputPath) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const apiUrl = process.env.WATERMARK_REMOVAL_API;
+        const formData = new FormData();
+        formData.append('video', fs.createReadStream(inputPath), {
+          filename: path.basename(inputPath),
+          contentType: 'video/mp4'
+        });
+        
+        const headers = {
+          ...formData.getHeaders()
+        };
+        
+        if (process.env.WATERMARK_REMOVAL_API_KEY) {
+          headers['Authorization'] = `Bearer ${process.env.WATERMARK_REMOVAL_API_KEY}`;
+        }
+        
+        const response = await axios.post(apiUrl, formData, {
+          headers: headers,
+          responseType: 'stream',
+          timeout: 300000, // 5 minutos
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity
+        });
+        
+        const writer = fs.createWriteStream(outputPath);
+        response.data.pipe(writer);
+        
+        writer.on('finish', () => {
+          console.log('✅ Marca d\'água removida via serviço externo!');
+          resolve(outputPath);
+        });
+        
+        writer.on('error', (err) => {
+          console.error('❌ Erro ao salvar vídeo do serviço externo:', err);
+          reject(err);
+        });
+      } catch (error) {
+        console.error('❌ Erro ao chamar serviço externo:', error.message);
+        reject(error);
+      }
+    });
+  }
+
+  /**
+   * Remove marca d'água via serviço local na VM
+   */
+  async removeWatermarkLocalService(inputPath, outputPath) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const serviceUrl = process.env.WATERMARK_REMOVAL_LOCAL_URL;
+        const formData = new FormData();
+        formData.append('video', fs.createReadStream(inputPath), {
+          filename: path.basename(inputPath),
+          contentType: 'video/mp4'
+        });
+        
+        const response = await axios.post(`${serviceUrl}/remove-watermark`, formData, {
+          headers: formData.getHeaders(),
+          responseType: 'stream',
+          timeout: 300000, // 5 minutos
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity
+        });
+        
+        const writer = fs.createWriteStream(outputPath);
+        response.data.pipe(writer);
+        
+        writer.on('finish', () => {
+          console.log('✅ Marca d\'água removida via serviço local na VM!');
+          resolve(outputPath);
+        });
+        
+        writer.on('error', (err) => {
+          console.error('❌ Erro ao salvar vídeo do serviço local:', err);
+          reject(err);
+        });
+      } catch (error) {
+        console.error('❌ Erro ao chamar serviço local:', error.message);
+        reject(error);
+      }
+    });
+  }
+
+  /**
+   * Remove marca d'água do vídeo usando FFmpeg (método local)
+   * Tenta várias técnicas: crop, delogo, overlay
+   */
+  async removeWatermarkFFmpeg(inputPath, outputPath) {
     return new Promise(async (resolve, reject) => {
       console.log('🎨 Tentando remover marca d\'água do vídeo...');
       
