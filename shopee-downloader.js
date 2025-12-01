@@ -961,40 +961,76 @@ class ShopeeDownloader {
   }
 
   /**
-   * Remove marca d'água via serviço local na VM
+   * Remove marca d'água via serviço local na VM ou Railway
+   * Também renderiza em 720p se o serviço suportar
    */
   async removeWatermarkLocalService(inputPath, outputPath) {
     return new Promise(async (resolve, reject) => {
       try {
-        const serviceUrl = process.env.WATERMARK_REMOVAL_LOCAL_URL;
+        const serviceUrl = process.env.WATERMARK_REMOVAL_LOCAL_URL || process.env.RENDER_SERVICE_URL;
+        if (!serviceUrl) {
+          throw new Error('URL do serviço não configurada');
+        }
+        
         const formData = new FormData();
         formData.append('video', fs.createReadStream(inputPath), {
           filename: path.basename(inputPath),
           contentType: 'video/mp4'
         });
         
-        const response = await axios.post(`${serviceUrl}/remove-watermark`, formData, {
-          headers: formData.getHeaders(),
-          responseType: 'stream',
-          timeout: 300000, // 5 minutos
-          maxContentLength: Infinity,
-          maxBodyLength: Infinity
-        });
+        // Tentar endpoint /render primeiro (renderiza em 720p + remove marca d'água)
+        // Se não existir, tentar /remove-watermark (só remove marca d'água)
+        let endpoint = '/render';
+        let response;
+        
+        try {
+          response = await axios.post(`${serviceUrl}${endpoint}`, formData, {
+            headers: formData.getHeaders(),
+            responseType: 'stream',
+            timeout: 300000, // 5 minutos
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
+          });
+        } catch (e) {
+          // Se /render não existir, tentar /remove-watermark
+          if (e.response && e.response.status === 404) {
+            console.log('📋 Endpoint /render não encontrado, tentando /remove-watermark...');
+            endpoint = '/remove-watermark';
+            formData = new FormData();
+            formData.append('video', fs.createReadStream(inputPath), {
+              filename: path.basename(inputPath),
+              contentType: 'video/mp4'
+            });
+            response = await axios.post(`${serviceUrl}${endpoint}`, formData, {
+              headers: formData.getHeaders(),
+              responseType: 'stream',
+              timeout: 300000,
+              maxContentLength: Infinity,
+              maxBodyLength: Infinity
+            });
+          } else {
+            throw e;
+          }
+        }
         
         const writer = fs.createWriteStream(outputPath);
         response.data.pipe(writer);
         
         writer.on('finish', () => {
-          console.log('✅ Marca d\'água removida via serviço local na VM!');
+          if (endpoint === '/render') {
+            console.log('✅ Vídeo renderizado em 720p e marca d\'água removida via serviço!');
+          } else {
+            console.log('✅ Marca d\'água removida via serviço!');
+          }
           resolve(outputPath);
         });
         
         writer.on('error', (err) => {
-          console.error('❌ Erro ao salvar vídeo do serviço local:', err);
+          console.error('❌ Erro ao salvar vídeo do serviço:', err);
           reject(err);
         });
       } catch (error) {
-        console.error('❌ Erro ao chamar serviço local:', error.message);
+        console.error('❌ Erro ao chamar serviço:', error.message);
         reject(error);
       }
     });
